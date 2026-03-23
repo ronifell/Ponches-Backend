@@ -112,7 +112,7 @@ module.exports = function registerAttendanceRoutes(app) {
     if (!eventType || !officeId) {
       return res.status(400).json({ error: 'eventType and officeId are required' });
     }
-    if (!['CHECK_IN', 'MOVEMENT', 'WORKDAY_CLOSED'].includes(eventType)) {
+    if (!['CHECK_IN', 'MOVEMENT', 'GEOFENCE_ENTER', 'GEOFENCE_EXIT', 'WORKDAY_CLOSED'].includes(eventType)) {
       return res.status(400).json({ error: 'Invalid eventType' });
     }
     if (!['GEOFENCE', 'MANUAL', 'AUTO'].includes(source)) {

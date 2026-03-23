@@ -43,7 +43,7 @@ async function workdayAutoClosureJob() {
     `SELECT a.employee_id, a.office_id
      FROM attendance_events a
      WHERE a.workday_date = ?
-       AND a.event_type IN ('CHECK_IN', 'MOVEMENT')
+       AND a.event_type IN ('CHECK_IN', 'MOVEMENT', 'GEOFENCE_ENTER', 'GEOFENCE_EXIT')
        AND NOT EXISTS (
          SELECT 1
          FROM attendance_events b

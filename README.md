@@ -19,6 +19,8 @@ Edit:
 3. Seed demo data: `npm run db:seed`
 4. Run: `npm start`
 
+**Existing databases:** If you ran migrations before the GEOFENCE_ENTER/GEOFENCE_EXIT update, run the migration in `src/db/migrations/001_add_geofence_enter_exit.sql` manually (e.g. `mysql -u user -p dbname < src/db/migrations/001_add_geofence_enter_exit.sql`).
+
 ## API Endpoints (MVP)
 
 - `POST /auth/login`

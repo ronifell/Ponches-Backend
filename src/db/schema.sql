@@ -62,6 +62,8 @@ CREATE TABLE IF NOT EXISTS attendance_events (
   event_type ENUM(
     'CHECK_IN',
     'MOVEMENT',
+    'GEOFENCE_ENTER',
+    'GEOFENCE_EXIT',
     'WORKDAY_CLOSED'
   ) NOT NULL,
   -- Whether workday was ended manually by employee; used for notifications
