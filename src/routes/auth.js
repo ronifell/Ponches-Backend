@@ -10,7 +10,10 @@ async function login(req, res) {
   }
 
   const [rows] = await pool.query(
-    'SELECT id, employee_code, company_id, office_id, role, full_name, password_hash FROM employees WHERE employee_code = ? LIMIT 1',
+    `SELECT e.id, e.employee_code, e.company_id, e.office_id, e.role, e.full_name, e.password_hash, o.name AS office_name
+     FROM employees e
+     LEFT JOIN offices o ON o.id = e.office_id
+     WHERE e.employee_code = ? LIMIT 1`,
     [employeeCode]
   );
   const employee = rows?.[0];
@@ -38,6 +41,7 @@ async function login(req, res) {
       role: employee.role,
       fullName: employee.full_name,
       officeId: employee.office_id,
+      officeName: employee.office_name || 'Office',
       companyId: employee.company_id
     }
   });
