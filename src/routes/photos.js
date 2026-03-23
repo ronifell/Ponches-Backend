@@ -54,73 +54,98 @@ async function getSupervisorsForOffice(officeId) {
 
 module.exports = function registerPhotoRoutes(app) {
   app.post('/photos', authRequired, upload.single('photo'), async (req, res) => {
-    const employeeId = req.user.employeeId;
-    const companyId = req.user.companyId;
-    const officeId = req.user.officeId;
+    try {
+      const employeeId = req.user.employeeId;
+      const companyId = req.user.companyId;
+      const officeId = req.user.officeId;
 
-    const {
-      orderNumber,
-      workType,
-      latitude,
-      longitude,
-      occurredAt
-    } = req.body || {};
+      const {
+        orderNumber: rawOrderNumber,
+        workType: rawWorkType,
+        latitude,
+        longitude,
+        occurredAt
+      } = req.body || {};
 
-    if (!req.file) return res.status(400).json({ error: 'Missing photo file' });
-    if (!orderNumber || !workType || latitude === undefined || longitude === undefined) {
-      return res.status(400).json({ error: 'orderNumber, workType, latitude, longitude are required' });
-    }
+      // Android multipart fields can sometimes arrive as JSON-escaped strings like `"001"`.
+      // Normalize by unescaping and stripping wrapping quotes.
+      const normalizeField = (v) => {
+        if (v === null || v === undefined) return v;
+        if (typeof v !== 'string') return v;
 
-    const lat = Number(latitude);
-    const lng = Number(longitude);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-      return res.status(400).json({ error: 'Invalid latitude/longitude' });
-    }
+        let s = v.trim();
+        s = s.replace(/\\"/g, '"');
 
-    const occurredAtDt = parseOccuredAt(occurredAt);
+        // Strip wrapping quotes: "001" or '001'
+        if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+          s = s.slice(1, -1);
+        }
+        return s;
+      };
 
-    const order = await getOrderValidation({ orderNumber: String(orderNumber) });
-    let validation_result = 'UNKNOWN';
-    let validation_distance_meters = null;
+      const orderNumber = normalizeField(rawOrderNumber);
+      const workType = normalizeField(rawWorkType);
 
-    if (order) {
+      if (!req.file) return res.status(400).json({ error: 'Missing photo file' });
+      if (!orderNumber || !workType || latitude === undefined || longitude === undefined) {
+        return res.status(400).json({ error: 'orderNumber, workType, latitude, longitude are required' });
+      }
+
+      const lat = Number(latitude);
+      const lng = Number(longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        return res.status(400).json({ error: 'Invalid latitude/longitude' });
+      }
+
+      const occurredAtDt = parseOccuredAt(occurredAt);
+
+      const normalizedOrderNumberStr = String(orderNumber);
+      const order = await getOrderValidation({ orderNumber: normalizedOrderNumberStr });
+
+      if (!order) {
+        // `photo_uploads.order_number` has a FK to `customer_orders`, so we must reject unknown order numbers.
+        return res.status(400).json({ error: `Unknown orderNumber: ${normalizedOrderNumberStr}` });
+      }
+
+      let validation_result = 'UNKNOWN';
+      let validation_distance_meters = null;
+
       validation_distance_meters = Math.round(
         haversineDistanceMeters(order.latitude, order.longitude, lat, lng)
       );
       validation_result = validation_distance_meters <= order.radius_meters ? 'APPROVED' : 'REJECTED';
-    }
 
-    // Move uploaded file to a stable location
-    const dateStr = occurredAtDt.toFormat('yyyy-LL-dd');
-    const finalDir = path.join(env.uploads.uploadDir, companyId, employeeId, dateStr);
-    ensureDir(finalDir);
-    const finalPath = path.join(finalDir, req.file.filename);
-    fs.renameSync(req.file.path, finalPath);
+      // Move uploaded file to a stable location
+      const dateStr = occurredAtDt.toFormat('yyyy-LL-dd');
+      const finalDir = path.join(env.uploads.uploadDir, companyId, employeeId, dateStr);
+      ensureDir(finalDir);
+      const finalPath = path.join(finalDir, req.file.filename);
+      fs.renameSync(req.file.path, finalPath);
 
-    const publicPath = `/uploads/${companyId}/${employeeId}/${dateStr}/${req.file.filename}`;
+      const publicPath = `/uploads/${companyId}/${employeeId}/${dateStr}/${req.file.filename}`;
 
-    await pool.query(
-      `INSERT INTO photo_uploads
-      (id, company_id, employee_id, order_number, work_type, latitude, longitude, occurred_at, validation_result, validation_distance_meters, server_path)
-      VALUES (UUID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        companyId,
-        employeeId,
-        String(orderNumber),
-        String(workType),
-        lat,
-        lng,
-        occurredAtDt.toSQL({ includeOffset: false }),
-        validation_result,
-        validation_distance_meters,
-        publicPath
-      ]
-    );
+      await pool.query(
+        `INSERT INTO photo_uploads
+        (id, company_id, employee_id, order_number, work_type, latitude, longitude, occurred_at, validation_result, validation_distance_meters, server_path)
+        VALUES (UUID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          companyId,
+          employeeId,
+          normalizedOrderNumberStr,
+          String(workType),
+          lat,
+          lng,
+          occurredAtDt.toSQL({ includeOffset: false }),
+          validation_result,
+          validation_distance_meters,
+          publicPath
+        ]
+      );
 
-    if (validation_result === 'REJECTED') {
-      const supervisors = await getSupervisorsForOffice(officeId);
-      const subject = `Photo validation failed (${orderNumber})`;
-      const text = `A photo for order ${orderNumber} was rejected (distance=${validation_distance_meters ?? 'n/a'}m).`;
+      if (validation_result === 'REJECTED') {
+        const supervisors = await getSupervisorsForOffice(officeId);
+        const subject = `Photo validation failed (${normalizedOrderNumberStr})`;
+        const text = `A photo for order ${normalizedOrderNumberStr} was rejected (distance=${validation_distance_meters ?? 'n/a'}m).`;
 
       // Notify employee (evidence submission feedback).
       const employee = await getEmployeeContacts(employeeId);
@@ -131,37 +156,30 @@ module.exports = function registerPhotoRoutes(app) {
         ]);
       }
 
-      await Promise.all(
-        supervisors.map(async (s) => {
-          if (s.email) await sendEmail({ to: s.email, subject, text });
-          if (s.fcm_token) await sendFcm({ toToken: s.fcm_token, title: 'Photo validation failed', body: text });
-        })
-      );
-    } else if (validation_result === 'APPROVED') {
-      // Notify employee on success (optional but aligns with “validation alerts”).
-      const employee = await getEmployeeContacts(employeeId);
-      if (employee && (employee.email || employee.fcm_token)) {
-        const subject = `Photo approved (${orderNumber})`;
-        const text = `Your photo for order ${orderNumber} was validated successfully.`;
-        await Promise.all([
-          employee.email ? sendEmail({ to: employee.email, subject, text }) : Promise.resolve(),
-          employee.fcm_token ? sendFcm({ toToken: employee.fcm_token, title: 'Photo approved', body: text }) : Promise.resolve()
-        ]);
+        await Promise.all(
+          supervisors.map(async (s) => {
+            if (s.email) await sendEmail({ to: s.email, subject, text });
+            if (s.fcm_token) await sendFcm({ toToken: s.fcm_token, title: 'Photo validation failed', body: text });
+          })
+        );
+      } else if (validation_result === 'APPROVED') {
+        // Notify employee on success (aligns with “validation alerts”).
+        const employee = await getEmployeeContacts(employeeId);
+        if (employee && (employee.email || employee.fcm_token)) {
+          const subject = `Photo approved (${normalizedOrderNumberStr})`;
+          const text = `Your photo for order ${normalizedOrderNumberStr} was validated successfully.`;
+          await Promise.all([
+            employee.email ? sendEmail({ to: employee.email, subject, text }) : Promise.resolve(),
+            employee.fcm_token ? sendFcm({ toToken: employee.fcm_token, title: 'Photo approved', body: text }) : Promise.resolve()
+          ]);
+        }
       }
-    } else {
-      // Unknown order number (cannot validate). Still notify the employee.
-      const employee = await getEmployeeContacts(employeeId);
-      if (employee && (employee.email || employee.fcm_token)) {
-        const subject = `Photo received (${orderNumber})`;
-        const text = `We received your photo for order ${orderNumber}. Validation will be performed when the order details are available.`;
-        await Promise.all([
-          employee.email ? sendEmail({ to: employee.email, subject, text }) : Promise.resolve(),
-          employee.fcm_token ? sendFcm({ toToken: employee.fcm_token, title: 'Photo received', body: text }) : Promise.resolve()
-        ]);
-      }
-    }
 
-    return res.status(201).json({ ok: true, validationResult: validation_result });
+      return res.status(201).json({ ok: true, validationResult: validation_result });
+    } catch (err) {
+      console.error('Photo upload failed:', err);
+      return res.status(500).json({ error: 'Photo upload failed' });
+    }
   });
 
   app.get('/photos/:employeeId', authRequired, async (req, res) => {

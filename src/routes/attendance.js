@@ -180,7 +180,16 @@ module.exports = function registerAttendanceRoutes(app) {
          LIMIT 200`,
         [employeeId]
       );
-      return res.json({ items: rows || [] });
+      const items = (rows || []).map((r) => ({
+        id: r.id,
+        eventType: r.event_type,
+        manualClose: Boolean(r.manual_close),
+        source: r.source,
+        occurredAt: r.occurred_at,
+        workdayDate: r.workday_date,
+        geofenceKey: r.geofence_key
+      }));
+      return res.json({ items });
     }
 
     if (!['SUPERVISOR', 'ADMIN'].includes(req.user.role)) {
@@ -201,7 +210,17 @@ module.exports = function registerAttendanceRoutes(app) {
        LIMIT 200`,
       [employeeId]
     );
-    return res.json({ items: rows || [] });
+    const items = (rows || []).map((r) => ({
+      id: r.id,
+      eventType: r.event_type,
+      manualClose: Boolean(r.manual_close),
+      source: r.source,
+      occurredAt: r.occurred_at,
+      workdayDate: r.workday_date,
+      geofenceKey: r.geofence_key,
+      officeId: r.office_id
+    }));
+    return res.json({ items });
   });
 };
 
