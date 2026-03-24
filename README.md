@@ -19,7 +19,7 @@ Edit:
 3. Seed demo data: `npm run db:seed`
 4. Run: `npm start`
 
-**Existing databases:** If you ran migrations before the GEOFENCE_ENTER/GEOFENCE_EXIT update, run the migration in `src/db/migrations/001_add_geofence_enter_exit.sql` manually (e.g. `mysql -u user -p dbname < src/db/migrations/001_add_geofence_enter_exit.sql`).
+**Existing databases:** If you ran migrations before the GEOFENCE_ENTER/GEOFENCE_EXIT update, run the migration in `src/db/migrations/001_add_geofence_enter_exit.sql` manually. For employee invites: `npm run db:invites-migrate`.
 
 ## API Endpoints (MVP)
 
@@ -30,4 +30,8 @@ Edit:
 - `GET /photos/{employeeId}`
 - `GET /geofences`
 - `GET /orders/{orderNumber}`
+- `POST /invites` (admin/supervisor) – create invite, returns invite URL
+- `GET /invites/{token}` – validate invite, return employee info
+- `POST /invites/{token}/complete` – set password + optional email
+- `GET /invite/{token}` – web page to complete setup
 

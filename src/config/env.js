@@ -13,6 +13,8 @@ const envPathCandidates = [
   path.join(process.cwd(), 'env.example'),
 
   // When running commands from the repo root, process.cwd() is the repo root
+  // IMPORTANT: backend/.env was missing—when run from root, env.example was loaded instead!
+  path.join(process.cwd(), 'backend', '.env'),
   path.join(process.cwd(), 'backend', 'env.local'),
   path.join(process.cwd(), 'backend', 'env.example'),
 
@@ -20,9 +22,11 @@ const envPathCandidates = [
   path.join(process.cwd(), 'env.example') // repo root fallback
 ];
 
+let loadedEnvPath = null;
 for (const p of envPathCandidates) {
   if (fs.existsSync(p) && fs.statSync(p).isFile()) {
     dotenv.config({ path: p, override: false });
+    loadedEnvPath = p;
     break;
   }
 }
@@ -65,6 +69,12 @@ module.exports = {
 
   uploads: {
     uploadDir: process.env.UPLOAD_DIR || path.join(process.cwd(), 'backend', 'uploads')
-  }
+  },
+
+  // Base URL for invite links (e.g. https://api.ponches.com). Leave empty to use request Host.
+  inviteBaseUrl: process.env.INVITE_BASE_URL || '',
+
+  // For debugging env loading (which file was used)
+  _loadedEnvPath: loadedEnvPath
 };
 

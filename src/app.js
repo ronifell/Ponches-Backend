@@ -10,11 +10,16 @@ const registerAttendanceRoutes = require('./routes/attendance');
 const registerPhotoRoutes = require('./routes/photos');
 const registerGeofenceRoutes = require('./routes/geofences');
 const registerOrderRoutes = require('./routes/orders');
+const registerInviteRoutes = require('./routes/invites');
 
 function createApp() {
   const app = express();
 
   app.use(cors());
+  app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl || req.url}`);
+    next();
+  });
   app.use(express.json({ limit: '2mb' }));
 
   // Serve uploaded images so the Android client can render them.
@@ -28,6 +33,7 @@ function createApp() {
   registerPhotoRoutes(app);
   registerGeofenceRoutes(app);
   registerOrderRoutes(app);
+  registerInviteRoutes(app);
 
   app.get('/health', (req, res) => res.json({ ok: true }));
 

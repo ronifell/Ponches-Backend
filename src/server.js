@@ -93,8 +93,15 @@ async function workdayAutoClosureJob() {
 
 async function main() {
   const app = createApp();
+  const env = require('./config/env');
   const port = process.env.PORT ? Number(process.env.PORT) : undefined;
   const serverPort = port || app.get('port') || 3001;
+
+  // Debug: show which env file was loaded and SMTP host (helps trace 10.10.7.111 vs smtp.gmail.com)
+  console.log(`[env] loaded: ${env._loadedEnvPath || 'none'}`);
+  if (env.mail.smtpHost) {
+    console.log(`[env] SMTP host: ${env.mail.smtpHost}:${env.mail.smtpPort}`);
+  }
 
   app.listen(serverPort, () => {
     console.log(`Ponches backend listening on port ${serverPort}`);

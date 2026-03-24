@@ -100,6 +100,18 @@ CREATE TABLE IF NOT EXISTS photo_uploads (
   INDEX idx_photos_employee (employee_id, occurred_at)
 ) ENGINE=InnoDB;
 
+-- Employee invites: admin sends link; user sets password + optional email
+CREATE TABLE IF NOT EXISTS employee_invites (
+  token CHAR(36) PRIMARY KEY,
+  employee_id CHAR(36) NOT NULL,
+  expires_at DATETIME(3) NOT NULL,
+  used_at DATETIME(3) NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_invites_employee FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE,
+  INDEX idx_invites_employee (employee_id),
+  INDEX idx_invites_expires (expires_at)
+) ENGINE=InnoDB;
+
 -- Basic reference data for cron/job logic.
 CREATE TABLE IF NOT EXISTS workday_closure_notified (
   employee_id CHAR(36) NOT NULL,

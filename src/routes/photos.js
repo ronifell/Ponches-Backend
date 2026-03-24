@@ -55,6 +55,7 @@ async function getSupervisorsForOffice(officeId) {
 module.exports = function registerPhotoRoutes(app) {
   app.post('/photos', authRequired, upload.single('photo'), async (req, res) => {
     try {
+      console.log('POST /photos received', req.file ? `(file: ${req.file.originalname || req.file.filename})` : '(no file)');
       const employeeId = req.user.employeeId;
       const companyId = req.user.companyId;
       const officeId = req.user.officeId;
@@ -142,39 +143,46 @@ module.exports = function registerPhotoRoutes(app) {
         ]
       );
 
-      if (validation_result === 'REJECTED') {
-        const supervisors = await getSupervisorsForOffice(officeId);
-        const subject = `Photo validation failed (${normalizedOrderNumberStr})`;
-        const text = `A photo for order ${normalizedOrderNumberStr} was rejected (distance=${validation_distance_meters ?? 'n/a'}m).`;
+      // Email/FCM must not fail the upload if SMTP or push is unreachable (e.g. ETIMEDOUT to internal relay).
+      try {
+        if (validation_result === 'REJECTED') {
+          const supervisors = await getSupervisorsForOffice(officeId);
+          const subject = `Photo validation failed (${normalizedOrderNumberStr})`;
+          const text = `A photo for order ${normalizedOrderNumberStr} was rejected (distance=${validation_distance_meters ?? 'n/a'}m).`;
 
-      // Notify employee (evidence submission feedback).
-      const employee = await getEmployeeContacts(employeeId);
-      if (employee && (employee.email || employee.fcm_token)) {
-        await Promise.all([
-          employee.email ? sendEmail({ to: employee.email, subject, text }) : Promise.resolve(),
-          employee.fcm_token ? sendFcm({ toToken: employee.fcm_token, title: 'Photo validation failed', body: text }) : Promise.resolve()
-        ]);
-      }
+          const employee = await getEmployeeContacts(employeeId);
+          if (employee && (employee.email || employee.fcm_token)) {
+            await Promise.all([
+              employee.email ? sendEmail({ to: employee.email, subject, text }) : Promise.resolve(),
+              employee.fcm_token ? sendFcm({ toToken: employee.fcm_token, title: 'Photo validation failed', body: text }) : Promise.resolve()
+            ]);
+          }
 
-        await Promise.all(
-          supervisors.map(async (s) => {
-            if (s.email) await sendEmail({ to: s.email, subject, text });
-            if (s.fcm_token) await sendFcm({ toToken: s.fcm_token, title: 'Photo validation failed', body: text });
-          })
-        );
-      } else if (validation_result === 'APPROVED') {
-        // Notify employee on success (aligns with “validation alerts”).
-        const employee = await getEmployeeContacts(employeeId);
-        if (employee && (employee.email || employee.fcm_token)) {
-          const subject = `Photo approved (${normalizedOrderNumberStr})`;
-          const text = `Your photo for order ${normalizedOrderNumberStr} was validated successfully.`;
-          await Promise.all([
-            employee.email ? sendEmail({ to: employee.email, subject, text }) : Promise.resolve(),
-            employee.fcm_token ? sendFcm({ toToken: employee.fcm_token, title: 'Photo approved', body: text }) : Promise.resolve()
-          ]);
+          await Promise.all(
+            supervisors.map(async (s) => {
+              if (s.email) await sendEmail({ to: s.email, subject, text });
+              if (s.fcm_token) await sendFcm({ toToken: s.fcm_token, title: 'Photo validation failed', body: text });
+            })
+          );
+        } else if (validation_result === 'APPROVED') {
+          const employee = await getEmployeeContacts(employeeId);
+          if (employee && (employee.email || employee.fcm_token)) {
+            const subject = `Photo approved (${normalizedOrderNumberStr})`;
+            const text = `Your photo for order ${normalizedOrderNumberStr} was validated successfully.`;
+            await Promise.all([
+              employee.email ? sendEmail({ to: employee.email, subject, text }) : Promise.resolve(),
+              employee.fcm_token ? sendFcm({ toToken: employee.fcm_token, title: 'Photo approved', body: text }) : Promise.resolve()
+            ]);
+          }
         }
+      } catch (notifyErr) {
+        console.error('Photo upload saved but notification failed:', notifyErr.message || notifyErr);
       }
 
+      console.log(
+        `Photo uploaded: employee=${employeeId} order=${normalizedOrderNumberStr} workType=${workType} ` +
+        `validation=${validation_result} distance=${validation_distance_meters ?? 'n/a'}m path=${publicPath}`
+      );
       return res.status(201).json({ ok: true, validationResult: validation_result });
     } catch (err) {
       console.error('Photo upload failed:', err);
