@@ -135,6 +135,58 @@ async function releasePhotoNotificationGuard({
   );
 }
 
+let photoUploadRequestGuardsEnsured = false;
+async function ensurePhotoUploadRequestGuardsTable() {
+  if (photoUploadRequestGuardsEnsured) return;
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS photo_upload_request_guards (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      company_id CHAR(36) NOT NULL,
+      employee_id CHAR(36) NOT NULL,
+      order_number VARCHAR(128) NOT NULL,
+      work_type VARCHAR(128) NOT NULL,
+      client_file_name VARCHAR(255) NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_photo_upload_request_guard (
+        company_id, employee_id, order_number, work_type, client_file_name
+      )
+    ) ENGINE=InnoDB;`
+  );
+  photoUploadRequestGuardsEnsured = true;
+}
+
+async function tryAcquirePhotoUploadRequestGuard({
+  companyId,
+  employeeId,
+  orderNumber,
+  workType,
+  clientFileName
+}) {
+  await ensurePhotoUploadRequestGuardsTable();
+  const [result] = await pool.query(
+    `INSERT IGNORE INTO photo_upload_request_guards
+      (company_id, employee_id, order_number, work_type, client_file_name)
+     VALUES (?, ?, ?, ?, ?)`,
+    [companyId, employeeId, orderNumber, String(workType), clientFileName]
+  );
+  return result?.affectedRows === 1;
+}
+
+async function releasePhotoUploadRequestGuard({
+  companyId,
+  employeeId,
+  orderNumber,
+  workType,
+  clientFileName
+}) {
+  await ensurePhotoUploadRequestGuardsTable();
+  await pool.query(
+    `DELETE FROM photo_upload_request_guards
+     WHERE company_id = ? AND employee_id = ? AND order_number = ? AND work_type = ? AND client_file_name = ?`,
+    [companyId, employeeId, orderNumber, String(workType), clientFileName]
+  );
+}
+
 function buildSupervisorUploadEmailText({
   employeeDetails,
   normalizedOrderNumberStr,
@@ -176,8 +228,14 @@ function buildPhotoAttachmentName(file, fallbackPath) {
   return `${rawName}${fallbackExt}`;
 }
 
+function buildClientFileNameForGuard(file) {
+  const name = String(file?.originalname || file?.filename || '').trim().toLowerCase();
+  return name || 'unknown-upload.jpg';
+}
+
 module.exports = function registerPhotoRoutes(app) {
   app.post('/photos', authRequired, upload.single('photo'), async (req, res) => {
+    let uploadGuard = null;
     try {
       console.log('POST /photos received', req.file ? `(file: ${req.file.originalname || req.file.filename})` : '(no file)');
       const employeeId = req.user.employeeId;
@@ -231,6 +289,23 @@ module.exports = function registerPhotoRoutes(app) {
       if (!order) {
         // `photo_uploads.order_number` has a FK to `customer_orders`, so we must reject unknown order numbers.
         return res.status(400).json({ error: `Unknown orderNumber: ${normalizedOrderNumberStr}` });
+      }
+
+      uploadGuard = {
+        companyId,
+        employeeId,
+        orderNumber: normalizedOrderNumberStr,
+        workType: String(workType),
+        clientFileName: buildClientFileNameForGuard(req.file)
+      };
+      const shouldProcessUpload = await tryAcquirePhotoUploadRequestGuard(uploadGuard);
+      if (!shouldProcessUpload) {
+        try {
+          if (req.file?.path && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+        } catch (e) {
+          console.warn('Duplicate guarded upload: failed to delete temp file:', e?.message || e);
+        }
+        return res.status(200).json({ ok: true, duplicate: true });
       }
 
       // Idempotency / de-dupe:
@@ -416,6 +491,9 @@ module.exports = function registerPhotoRoutes(app) {
       );
       return res.status(201).json({ ok: true, validationResult: validation_result });
     } catch (err) {
+      if (uploadGuard) {
+        await releasePhotoUploadRequestGuard(uploadGuard).catch(() => {});
+      }
       console.error('Photo upload failed:', err);
       return res.status(500).json({ error: 'Photo upload failed' });
     }
