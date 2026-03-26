@@ -67,6 +67,9 @@ module.exports = {
     serverKey: process.env.FCM_SERVER_KEY || ''
   },
 
+  // Receives an email on every new attendance_events row (same company).
+  superManagerEmployeeCode: process.env.SUPER_MANAGER_EMPLOYEE_CODE || 'SUP001',
+
   uploads: {
     uploadDir: process.env.UPLOAD_DIR || path.join(process.cwd(), 'backend', 'uploads')
   },

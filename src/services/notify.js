@@ -12,18 +12,30 @@ async function sendEmail({ to, subject, text }) {
     host: env.mail.smtpHost,
     port: env.mail.smtpPort,
     secure: env.mail.smtpPort === 465,
+    connectionTimeout: 15_000,
+    greetingTimeout: 15_000,
+    socketTimeout: 15_000,
     auth: {
       user: env.mail.smtpUser,
       pass: env.mail.smtpPass
     }
   });
 
-  await transporter.sendMail({
-    from: env.mail.mailFrom,
-    to,
-    subject,
-    text
-  });
+  try {
+    await transporter.sendMail({
+      from: env.mail.mailFrom,
+      to,
+      subject,
+      text
+    });
+  } catch (e) {
+    const hint =
+      e.code === 'ESOCKET' || e.code === 'ETIMEDOUT'
+        ? ' (unreachable host/port: fix SMTP_HOST, firewall, VPN, or DNS — e.g. corporate DNS may resolve smtp.gmail.com to an internal relay)'
+        : '';
+    const msg = e.message || String(e);
+    throw new Error(`SMTP ${env.mail.smtpHost}:${env.mail.smtpPort} — ${msg}${hint}`);
+  }
 }
 
 async function sendFcm({ toToken, title, body }) {

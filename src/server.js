@@ -3,6 +3,7 @@ const cron = require('node-cron');
 const { nowSantoDomingo } = require('./utils/timezone');
 const { pool } = require('./db/pool');
 const { sendEmail, sendFcm } = require('./services/notify');
+const { notifySuperManagerAttendanceRecord } = require('./services/superManagerAttendanceNotify');
 
 async function sendWorkdayAutoClosedEmailAndPush({ employeeId, officeId, occurredAtDt }) {
   // Notify supervisors for the office (best effort).
@@ -81,6 +82,22 @@ async function workdayAutoClosureJob() {
       `INSERT INTO workday_closure_notified (employee_id, workday_date) VALUES (?, ?)`,
       [r.employee_id, workdayDate]
     );
+
+    const [empCompany] = await pool.query('SELECT company_id FROM employees WHERE id = ? LIMIT 1', [
+      r.employee_id
+    ]);
+    const companyId = empCompany?.[0]?.company_id;
+    if (companyId) {
+      notifySuperManagerAttendanceRecord({
+        companyId,
+        employeeId: r.employee_id,
+        officeId: r.office_id,
+        eventType: 'WORKDAY_CLOSED',
+        source: 'AUTO',
+        occurredAtFormatted: occurredAtDt.toFormat('yyyy-LL-dd HH:mm'),
+        manualClose: false
+      }).catch((e) => console.warn('Super manager attendance email failed:', e.message || e));
+    }
 
     // Notify supervisors (best effort).
     sendWorkdayAutoClosedEmailAndPush({

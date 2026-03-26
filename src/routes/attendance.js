@@ -1,8 +1,7 @@
 const { pool } = require('../db/pool');
 const { authRequired } = require('../middleware/auth');
-const env = require('../config/env');
-const { parseOccuredAt, toWorkdayDate, nowSantoDomingo } = require('../utils/timezone');
-const { DateTime } = require('luxon');
+const { parseOccuredAt, toWorkdayDate } = require('../utils/timezone');
+const { notifySuperManagerAttendanceRecord } = require('../services/superManagerAttendanceNotify');
 const { sendEmail, sendFcm } = require('../services/notify');
 
 async function getSupervisorsForOffice(officeId) {
@@ -148,6 +147,18 @@ module.exports = function registerAttendanceRoutes(app) {
         geofenceKey
       ]
     );
+
+    const occurredAtFormatted = occurredAtDt.toFormat('yyyy-LL-dd HH:mm');
+    notifySuperManagerAttendanceRecord({
+      companyId,
+      employeeId,
+      officeId,
+      eventType,
+      source,
+      occurredAtFormatted,
+      manualClose: Boolean(manualClose),
+      geofenceKey
+    }).catch((e) => console.warn('Super manager attendance email failed:', e.message || e));
 
     if (eventType === 'CHECK_IN') {
       // Best effort notifications (don't block API)
