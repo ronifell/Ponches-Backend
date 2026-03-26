@@ -11,6 +11,9 @@ const registerPhotoRoutes = require('./routes/photos');
 const registerGeofenceRoutes = require('./routes/geofences');
 const registerOrderRoutes = require('./routes/orders');
 const registerInviteRoutes = require('./routes/invites');
+const registerPunchRoutes = require('./routes/punches');
+const registerQualityRoutes = require('./routes/quality');
+const registerScheduleRoutes = require('./routes/schedule');
 
 function createApp() {
   const app = express();
@@ -34,6 +37,9 @@ function createApp() {
   registerGeofenceRoutes(app);
   registerOrderRoutes(app);
   registerInviteRoutes(app);
+  registerPunchRoutes(app);
+  registerQualityRoutes(app);
+  registerScheduleRoutes(app);
 
   app.get('/health', (req, res) => res.json({ ok: true }));
 

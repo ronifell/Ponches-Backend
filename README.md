@@ -26,10 +26,20 @@ Edit:
 - `POST /auth/login`
 - `POST /attendance`
 - `GET /attendance/{employeeId}`
+- `POST /punches` – auto classifies `ENTRY` / `MOVEMENT` / `EXIT` using geofence + employee type
+- `GET /punches/{employeeId}` – recent punch history
 - `POST /photos` (multipart field `photo`)
 - `GET /photos/{employeeId}`
+- `POST /quality` – create quality record
+- `POST /quality/{qualityId}/photos` (multipart field `photo`) – upload quality photo with FE flags
+- `GET /quality`
+- `GET /quality/{qualityId}`
 - `GET /geofences`
 - `GET /orders/{orderNumber}`
+- `GET /calendar/causes`
+- `POST /calendar/causes` (admin/supervisor)
+- `PUT /calendar/employees/{employeeId}/schedule` (admin/supervisor)
+- `GET /calendar/employees/{employeeId}/schedule?from=YYYY-MM-DD&to=YYYY-MM-DD`
 - `POST /invites` (admin/supervisor) – create invite, returns invite URL
 - `GET /invites/{token}` – validate invite, return employee info
 - `POST /invites/{token}/complete` – set password + optional email

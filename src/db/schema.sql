@@ -43,6 +43,11 @@ CREATE TABLE IF NOT EXISTS employees (
   CONSTRAINT fk_employees_office FOREIGN KEY (office_id) REFERENCES offices(id)
 ) ENGINE=InnoDB;
 
+ALTER TABLE employees
+  ADD COLUMN IF NOT EXISTS employee_type ENUM('CENTRALIZED','DECENTRALIZED') NOT NULL DEFAULT 'CENTRALIZED',
+  ADD COLUMN IF NOT EXISTS supervisor_id CHAR(36) NULL,
+  ADD COLUMN IF NOT EXISTS is_supervisor TINYINT(1) NOT NULL DEFAULT 0;
+
 -- Orders represent a customer location used for photo validation.
 CREATE TABLE IF NOT EXISTS customer_orders (
   order_number VARCHAR(128) PRIMARY KEY,
@@ -98,6 +103,80 @@ CREATE TABLE IF NOT EXISTS photo_uploads (
   CONSTRAINT fk_photo_company FOREIGN KEY (company_id) REFERENCES companies(id),
   CONSTRAINT fk_photo_order FOREIGN KEY (order_number) REFERENCES customer_orders(order_number),
   INDEX idx_photos_employee (employee_id, occurred_at)
+) ENGINE=InnoDB;
+
+-- Punches table for business-facing Entry/Movement/Exit flow.
+CREATE TABLE IF NOT EXISTS punches (
+  id CHAR(36) PRIMARY KEY,
+  company_id CHAR(36) NOT NULL,
+  user_id CHAR(36) NOT NULL,
+  punch_type ENUM('ENTRY','MOVEMENT','EXIT') NOT NULL,
+  occurred_at DATETIME(3) NOT NULL,
+  latitude DOUBLE NOT NULL,
+  longitude DOUBLE NOT NULL,
+  office_id CHAR(36) NOT NULL,
+  workday_date DATE NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_punches_company FOREIGN KEY (company_id) REFERENCES companies(id),
+  CONSTRAINT fk_punches_user FOREIGN KEY (user_id) REFERENCES employees(id),
+  CONSTRAINT fk_punches_office FOREIGN KEY (office_id) REFERENCES offices(id),
+  INDEX idx_punches_user_workday (user_id, workday_date),
+  INDEX idx_punches_company_date (company_id, workday_date)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS qualities (
+  id CHAR(36) PRIMARY KEY,
+  company_id CHAR(36) NOT NULL,
+  user_id CHAR(36) NOT NULL,
+  order_id VARCHAR(128) NOT NULL,
+  work_type VARCHAR(128) NOT NULL,
+  status ENUM('PENDING','IN_REVIEW','APPROVED','REJECTED') NOT NULL DEFAULT 'PENDING',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_qualities_company FOREIGN KEY (company_id) REFERENCES companies(id),
+  CONSTRAINT fk_qualities_user FOREIGN KEY (user_id) REFERENCES employees(id),
+  INDEX idx_qualities_user_created (user_id, created_at)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS quality_photos (
+  id CHAR(36) PRIMARY KEY,
+  quality_id CHAR(36) NOT NULL,
+  photo_type VARCHAR(64) NOT NULL,
+  photo_url VARCHAR(512) NOT NULL,
+  fe TINYINT(1) NOT NULL DEFAULT 0,
+  fe_comment VARCHAR(1024) NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_quality_photos_quality FOREIGN KEY (quality_id) REFERENCES qualities(id) ON DELETE CASCADE,
+  INDEX idx_quality_photos_quality (quality_id)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS non_operational_causes (
+  id CHAR(36) PRIMARY KEY,
+  company_id CHAR(36) NOT NULL,
+  cause_name VARCHAR(128) NOT NULL,
+  active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_non_operational_causes_company FOREIGN KEY (company_id) REFERENCES companies(id),
+  UNIQUE KEY uq_non_operational_cause_name (company_id, cause_name)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS employee_work_schedules (
+  id CHAR(36) PRIMARY KEY,
+  company_id CHAR(36) NOT NULL,
+  employee_id CHAR(36) NOT NULL,
+  schedule_date DATE NOT NULL,
+  day_type ENUM('WORKDAY','DAY_OFF','HALF_DAY','NON_OPERATIONAL') NOT NULL DEFAULT 'WORKDAY',
+  non_operational_cause_id CHAR(36) NULL,
+  notes VARCHAR(512) NULL,
+  created_by CHAR(36) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_schedule_company FOREIGN KEY (company_id) REFERENCES companies(id),
+  CONSTRAINT fk_schedule_employee FOREIGN KEY (employee_id) REFERENCES employees(id),
+  CONSTRAINT fk_schedule_cause FOREIGN KEY (non_operational_cause_id) REFERENCES non_operational_causes(id),
+  CONSTRAINT fk_schedule_creator FOREIGN KEY (created_by) REFERENCES employees(id),
+  UNIQUE KEY uq_employee_schedule_date (employee_id, schedule_date),
+  INDEX idx_schedule_company_date (company_id, schedule_date)
 ) ENGINE=InnoDB;
 
 -- Employee invites: admin sends link; user sets password + optional email

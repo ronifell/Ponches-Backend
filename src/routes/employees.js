@@ -11,7 +11,10 @@ async function createEmployee(req, res) {
     companyId,
     officeId,
     role = 'EMPLOYEE',
-    email = null
+    email = null,
+    employeeType = 'CENTRALIZED',
+    supervisorId = null,
+    isSupervisor = false
   } = req.body || {};
 
   if (!employeeCode || !password || !fullName || !companyId || !officeId) {
@@ -21,12 +24,15 @@ async function createEmployee(req, res) {
   if (!['EMPLOYEE', 'SUPERVISOR', 'ADMIN'].includes(role)) {
     return res.status(400).json({ error: 'Invalid role' });
   }
+  if (!['CENTRALIZED', 'DECENTRALIZED'].includes(employeeType)) {
+    return res.status(400).json({ error: 'Invalid employeeType' });
+  }
 
   const employeeId = uuidv4();
   const passwordHash = await bcrypt.hash(password, 10);
   const [result] = await pool.query(
-    'INSERT INTO employees (id, employee_code, company_id, office_id, role, full_name, password_hash, email) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [employeeId, employeeCode, companyId, officeId, role, fullName, passwordHash, email]
+    'INSERT INTO employees (id, employee_code, company_id, office_id, role, full_name, password_hash, email, employee_type, supervisor_id, is_supervisor) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [employeeId, employeeCode, companyId, officeId, role, fullName, passwordHash, email, employeeType, supervisorId, isSupervisor ? 1 : 0]
   );
 
   // `insertId` isn't meaningful for explicit UUIDs; return the generated ID.
@@ -36,7 +42,7 @@ async function createEmployee(req, res) {
 async function getEmployee(req, res) {
   const { id } = req.params;
   const [rows] = await pool.query(
-    'SELECT id, employee_code, company_id, office_id, role, full_name, email, fcm_token FROM employees WHERE id = ? LIMIT 1',
+    'SELECT id, employee_code, company_id, office_id, role, full_name, email, fcm_token, employee_type, supervisor_id, is_supervisor FROM employees WHERE id = ? LIMIT 1',
     [id]
   );
   const employee = rows?.[0];
@@ -54,6 +60,9 @@ async function getEmployee(req, res) {
     companyId: employee.company_id,
     officeId: employee.office_id,
     role: employee.role,
+    employeeType: employee.employee_type,
+    supervisorId: employee.supervisor_id,
+    isSupervisor: Boolean(employee.is_supervisor),
     fullName: employee.full_name,
     email: employee.email,
     fcmToken: employee.fcm_token
@@ -62,7 +71,7 @@ async function getEmployee(req, res) {
 
 async function updateEmployee(req, res) {
   const { id } = req.params;
-  const { fullName, password, fcmToken, email, officeId, role } = req.body || {};
+  const { fullName, password, fcmToken, email, officeId, role, employeeType, supervisorId, isSupervisor } = req.body || {};
 
   const [rows] = await pool.query('SELECT id, company_id FROM employees WHERE id = ? LIMIT 1', [id]);
   const existing = rows?.[0];
@@ -106,6 +115,21 @@ async function updateEmployee(req, res) {
     if (!['EMPLOYEE', 'SUPERVISOR', 'ADMIN'].includes(role)) return res.status(400).json({ error: 'Invalid role' });
     updates.push('role = ?');
     params.push(role);
+  }
+  if (employeeType) {
+    if (!['CENTRALIZED', 'DECENTRALIZED'].includes(employeeType)) {
+      return res.status(400).json({ error: 'Invalid employeeType' });
+    }
+    updates.push('employee_type = ?');
+    params.push(employeeType);
+  }
+  if (supervisorId !== undefined) {
+    updates.push('supervisor_id = ?');
+    params.push(supervisorId);
+  }
+  if (isSupervisor !== undefined) {
+    updates.push('is_supervisor = ?');
+    params.push(isSupervisor ? 1 : 0);
   }
   if (password) {
     updates.push('password_hash = ?');
