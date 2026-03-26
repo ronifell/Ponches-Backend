@@ -49,26 +49,26 @@ async function handleCheckInNotifications({ employeeId, officeId, occurredAtDt }
 
   const employee = await getEmployeeContacts(employeeId);
 
-  // Best effort: employee + supervisors
-  const targets = [
-    ...(employee?.email || employee?.fcm_token ? [employee] : []),
-    ...supervisors
+  // Supervisors already get the admin-style attendance email via notifySuperManagerAttendanceRecord().
+  // So for late-arrival we avoid duplicate supervisor emails:
+  // - email only to the employee (if present)
+  // - push notifications to employee and supervisors (if they have FCM tokens)
+  const emailTargets = employee?.email ? [employee] : [];
+  const fcmTargets = [
+    ...(employee?.fcm_token ? [employee] : []),
+    ...supervisors.filter((s) => s?.fcm_token)
   ];
 
-  await Promise.all(
-    targets
-      .filter((t) => t && (t.email || t.fcm_token))
-      .map(async (t) => {
-        if (t.email) await sendEmail({ to: t.email, subject, text });
-        if (t.fcm_token) {
-          await sendFcm({
-            toToken: t.fcm_token,
-            title: 'Late arrival',
-            body: text
-          });
-        }
+  await Promise.all([
+    ...emailTargets.map(async (t) => sendEmail({ to: t.email, subject, text })),
+    ...fcmTargets.map(async (t) =>
+      sendFcm({
+        toToken: t.fcm_token,
+        title: 'Late arrival',
+        body: text
       })
-  );
+    )
+  ]);
 }
 
 async function handleWorkdayClosedNotifications({ employeeId, officeId, manualClose, occurredAtDt }) {
@@ -80,21 +80,26 @@ async function handleWorkdayClosedNotifications({ employeeId, officeId, manualCl
   const subject = `Workday auto-closed (${dateStr})`;
   const text = `Employee workday was not manually closed by 8:00 PM (auto closure).`;
 
-  const targets = [
-    ...(employee?.email || employee?.fcm_token ? [employee] : []),
-    ...supervisors
+  // Supervisors already get the admin-style attendance email via notifySuperManagerAttendanceRecord().
+  // So for workday-closed we avoid duplicate supervisor emails:
+  // - email only to the employee (if present)
+  // - push notifications to employee and supervisors (if they have FCM tokens)
+  const emailTargets = employee?.email ? [employee] : [];
+  const fcmTargets = [
+    ...(employee?.fcm_token ? [employee] : []),
+    ...supervisors.filter((s) => s?.fcm_token)
   ];
 
-  await Promise.all(
-    targets
-      .filter((t) => t && (t.email || t.fcm_token))
-      .map(async (s) => {
-        if (s.email) await sendEmail({ to: s.email, subject, text });
-        if (s.fcm_token) {
-          await sendFcm({ toToken: s.fcm_token, title: 'Workday auto-closed', body: subject });
-        }
+  await Promise.all([
+    ...emailTargets.map(async (t) => sendEmail({ to: t.email, subject, text })),
+    ...fcmTargets.map(async (t) =>
+      sendFcm({
+        toToken: t.fcm_token,
+        title: 'Workday auto-closed',
+        body: subject
       })
-  );
+    )
+  ]);
 }
 
 module.exports = function registerAttendanceRoutes(app) {

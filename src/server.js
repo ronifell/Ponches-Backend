@@ -6,7 +6,8 @@ const { sendEmail, sendFcm } = require('./services/notify');
 const { notifySuperManagerAttendanceRecord } = require('./services/superManagerAttendanceNotify');
 
 async function sendWorkdayAutoClosedEmailAndPush({ employeeId, officeId, occurredAtDt }) {
-  // Notify supervisors for the office (best effort).
+  // Supervisors already get the admin-style attendance email via notifySuperManagerAttendanceRecord().
+  // This function keeps supervisor push notifications (FCM) for auto closure.
   const [supervisors] = await pool.query(
     `SELECT email, fcm_token
      FROM employees
@@ -21,7 +22,6 @@ async function sendWorkdayAutoClosedEmailAndPush({ employeeId, officeId, occurre
 
   await Promise.all(
     supervisors.map(async (s) => {
-      if (s.email) await sendEmail({ to: s.email, subject, text });
       if (s.fcm_token) {
         await sendFcm({
           toToken: s.fcm_token,
@@ -120,8 +120,9 @@ async function main() {
     console.log(`[env] SMTP host: ${env.mail.smtpHost}:${env.mail.smtpPort}`);
   }
 
-  app.listen(serverPort, () => {
-    console.log(`Ponches backend listening on port ${serverPort}`);
+  // Bind all IPv4 interfaces so Android Emulator (10.0.2.2 → host) and LAN devices can connect.
+  app.listen(serverPort, '0.0.0.0', () => {
+    console.log(`Ponches backend listening on http://0.0.0.0:${serverPort}`);
   });
 
   // Run job every hour; internally exits until 20:00 Santo Domingo time.
