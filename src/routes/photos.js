@@ -93,6 +93,21 @@ async function tryAcquirePhotoNotificationGuard({
   return result?.affectedRows === 1;
 }
 
+async function releasePhotoNotificationGuard({
+  companyId,
+  employeeId,
+  orderNumber,
+  workType,
+  validationResult
+}) {
+  await ensurePhotoNotificationGuardsTable();
+  await pool.query(
+    `DELETE FROM photo_notification_guards
+     WHERE company_id = ? AND employee_id = ? AND order_number = ? AND work_type = ? AND validation_result = ?`,
+    [companyId, employeeId, orderNumber, String(workType), validationResult]
+  );
+}
+
 module.exports = function registerPhotoRoutes(app) {
   app.post('/photos', authRequired, upload.single('photo'), async (req, res) => {
     try {
@@ -232,44 +247,70 @@ module.exports = function registerPhotoRoutes(app) {
           });
 
           if (shouldNotify) {
-          const supervisors = await getSupervisorsForOffice(officeId);
-          const subject = `Photo validation failed (${normalizedOrderNumberStr})`;
-          const text = `A photo for order ${normalizedOrderNumberStr} was rejected (distance=${validation_distance_meters ?? 'n/a'}m).`;
+            try {
+              const supervisors = await getSupervisorsForOffice(officeId);
+              const subject = `Photo validation failed (${normalizedOrderNumberStr})`;
+              const text = `A photo for order ${normalizedOrderNumberStr} was rejected (distance=${validation_distance_meters ?? 'n/a'}m).`;
 
-          const employee = await getEmployeeContacts(employeeId);
-          if (employee && (employee.email || employee.fcm_token)) {
-            await Promise.all([
-              employee.email ? sendEmail({ to: employee.email, subject, text }) : Promise.resolve(),
-              employee.fcm_token ? sendFcm({ toToken: employee.fcm_token, title: 'Photo validation failed', body: text }) : Promise.resolve()
-            ]);
-          }
+              const employee = await getEmployeeContacts(employeeId);
+              if (employee && (employee.email || employee.fcm_token)) {
+                await Promise.all([
+                  employee.email ? sendEmail({ to: employee.email, subject, text }) : Promise.resolve(),
+                  employee.fcm_token
+                    ? sendFcm({ toToken: employee.fcm_token, title: 'Photo validation failed', body: text })
+                    : Promise.resolve()
+                ]);
+              }
 
-          await Promise.all(
-            supervisors.map(async (s) => {
-              if (s.email) await sendEmail({ to: s.email, subject, text });
-              if (s.fcm_token) await sendFcm({ toToken: s.fcm_token, title: 'Photo validation failed', body: text });
-            })
-          );
+              await Promise.all(
+                supervisors.map(async (s) => {
+                  if (s.email) await sendEmail({ to: s.email, subject, text });
+                  if (s.fcm_token) await sendFcm({ toToken: s.fcm_token, title: 'Photo validation failed', body: text });
+                })
+              );
+            } catch (innerErr) {
+              await releasePhotoNotificationGuard({
+                companyId,
+                employeeId,
+                orderNumber: normalizedOrderNumberStr,
+                workType: String(workType),
+                validationResult: validation_result
+              }).catch(() => {});
+              throw innerErr;
+            }
           }
         } else if (validation_result === 'APPROVED') {
-          const shouldNotify = await tryAcquirePhotoNotificationGuard({
-            companyId,
-            employeeId,
-            orderNumber: normalizedOrderNumberStr,
-            workType: String(workType),
-            validationResult: validation_result
-          });
-
-          if (shouldNotify) {
           const employee = await getEmployeeContacts(employeeId);
           if (employee && (employee.email || employee.fcm_token)) {
-            const subject = `Photo approved (${normalizedOrderNumberStr})`;
-            const text = `Your photo for order ${normalizedOrderNumberStr} was validated successfully.`;
-            await Promise.all([
-              employee.email ? sendEmail({ to: employee.email, subject, text }) : Promise.resolve(),
-              employee.fcm_token ? sendFcm({ toToken: employee.fcm_token, title: 'Photo approved', body: text }) : Promise.resolve()
-            ]);
-          }
+            const shouldNotify = await tryAcquirePhotoNotificationGuard({
+              companyId,
+              employeeId,
+              orderNumber: normalizedOrderNumberStr,
+              workType: String(workType),
+              validationResult: validation_result
+            });
+
+            if (shouldNotify) {
+              try {
+                const subject = `Photo approved (${normalizedOrderNumberStr})`;
+                const text = `Your photo for order ${normalizedOrderNumberStr} was validated successfully.`;
+                await Promise.all([
+                  employee.email ? sendEmail({ to: employee.email, subject, text }) : Promise.resolve(),
+                  employee.fcm_token
+                    ? sendFcm({ toToken: employee.fcm_token, title: 'Photo approved', body: text })
+                    : Promise.resolve()
+                ]);
+              } catch (innerErr) {
+                await releasePhotoNotificationGuard({
+                  companyId,
+                  employeeId,
+                  orderNumber: normalizedOrderNumberStr,
+                  workType: String(workType),
+                  validationResult: validation_result
+                }).catch(() => {});
+                throw innerErr;
+              }
+            }
           }
         }
       } catch (notifyErr) {
