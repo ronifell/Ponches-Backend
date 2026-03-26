@@ -99,6 +99,7 @@ module.exports = function registerPhotoRoutes(app) {
       }
 
       const occurredAtDt = parseOccuredAt(occurredAt);
+      const occurredAtSql = occurredAtDt.toSQL({ includeOffset: false });
 
       const normalizedOrderNumberStr = String(orderNumber);
       const order = await getOrderValidation({ orderNumber: normalizedOrderNumberStr });
@@ -106,6 +107,41 @@ module.exports = function registerPhotoRoutes(app) {
       if (!order) {
         // `photo_uploads.order_number` has a FK to `customer_orders`, so we must reject unknown order numbers.
         return res.status(400).json({ error: `Unknown orderNumber: ${normalizedOrderNumberStr}` });
+      }
+
+      // Idempotency / de-dupe:
+      // Mobile clients can retry uploads on flaky networks (or the UI can trigger twice).
+      // If the same employee uploads the same order/workType with the same occurredAt, treat it as one logical event.
+      // This prevents duplicate DB rows and duplicate emails/FCM.
+      const [existingUploads] = await pool.query(
+        `SELECT id, validation_result, validation_distance_meters, server_path
+         FROM photo_uploads
+         WHERE employee_id = ?
+           AND order_number = ?
+           AND work_type = ?
+           AND occurred_at = ?
+         ORDER BY occurred_at DESC
+         LIMIT 1`,
+        [employeeId, normalizedOrderNumberStr, String(workType), occurredAtSql]
+      );
+      const existing = existingUploads?.[0];
+      if (existing) {
+        // Best effort: remove the newly uploaded temp file since we won't store it.
+        try {
+          if (req.file?.path && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+        } catch (e) {
+          console.warn('Duplicate photo upload: failed to delete temp file:', e?.message || e);
+        }
+
+        console.log(
+          `Duplicate photo upload ignored: employee=${employeeId} order=${normalizedOrderNumberStr} workType=${workType} occurredAt=${occurredAtSql} ` +
+          `existingId=${existing.id} existingValidation=${existing.validation_result}`
+        );
+        return res.status(200).json({
+          ok: true,
+          duplicate: true,
+          validationResult: existing.validation_result
+        });
       }
 
       let validation_result = 'UNKNOWN';
@@ -136,7 +172,7 @@ module.exports = function registerPhotoRoutes(app) {
           String(workType),
           lat,
           lng,
-          occurredAtDt.toSQL({ includeOffset: false }),
+          occurredAtSql,
           validation_result,
           validation_distance_meters,
           publicPath
