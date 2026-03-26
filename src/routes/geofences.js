@@ -1,60 +1,71 @@
+const { v4: uuidv4 } = require('uuid');
 const { pool } = require('../db/pool');
-const { authRequired } = require('../middleware/auth');
+const { authRequired, requireRole } = require('../middleware/auth');
+
+function validateGeoBody(latitude, longitude, radiusMeters) {
+  const lat = Number(latitude);
+  const lng = Number(longitude);
+  const radius = Number(radiusMeters);
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(radius)) {
+    return { error: 'latitude, longitude and radiusMeters must be valid numbers' };
+  }
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+    return { error: 'Invalid latitude/longitude range' };
+  }
+  if (radius < 10 || radius > 5000) {
+    return { error: 'radiusMeters must be between 10 and 5000' };
+  }
+  return { lat, lng, radius: Math.round(radius) };
+}
 
 module.exports = function registerGeofenceRoutes(app) {
   app.put('/geofences/:geofenceKey', authRequired, async (req, res) => {
-    const { officeId } = req.user;
     const { geofenceKey } = req.params;
     const { latitude, longitude, radiusMeters } = req.body || {};
 
-    const lat = Number(latitude);
-    const lng = Number(longitude);
-    const radius = Number(radiusMeters);
-
-    if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(radius)) {
-      return res.status(400).json({ error: 'latitude, longitude and radiusMeters must be valid numbers' });
+    const parsed = validateGeoBody(latitude, longitude, radiusMeters);
+    if (parsed.error) {
+      return res.status(400).json({ error: parsed.error });
     }
-
-    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-      return res.status(400).json({ error: 'Invalid latitude/longitude range' });
-    }
-
-    if (radius < 10 || radius > 5000) {
-      return res.status(400).json({ error: 'radiusMeters must be between 10 and 5000' });
-    }
-
-    let [result] = await pool.query(
-      `UPDATE geofences
-       SET latitude = ?, longitude = ?, radius_meters = ?
-       WHERE geofence_key = ? AND office_id = ?`,
-      [lat, lng, Math.round(radius), geofenceKey, officeId]
-    );
-
-    // Fallback for testing UI: if the provided geofenceKey was edited incorrectly,
-    // still update the office geofence instead of failing with 404.
-    if (!result?.affectedRows) {
-      [result] = await pool.query(
-        `UPDATE geofences
-         SET latitude = ?, longitude = ?, radius_meters = ?
-         WHERE office_id = ?
-         LIMIT 1`,
-        [lat, lng, Math.round(radius), officeId]
-      );
-    }
-
-    if (!result?.affectedRows) {
-      return res.status(404).json({ error: 'Geofence not found for your office' });
-    }
+    const { lat, lng, radius } = parsed;
 
     const [rows] = await pool.query(
-      `SELECT geofence_key, latitude, longitude, radius_meters, office_id
-       FROM geofences
-       WHERE office_id = ?
-       ORDER BY geofence_key
+      `SELECT g.office_id, o.company_id
+       FROM geofences g
+       JOIN offices o ON o.id = g.office_id
+       WHERE g.geofence_key = ?
        LIMIT 1`,
-      [officeId]
+      [geofenceKey]
     );
-    const g = rows?.[0];
+    const row = rows?.[0];
+    if (!row) {
+      return res.status(404).json({ error: 'Geofence not found' });
+    }
+
+    const isAdminOrSupervisor = ['ADMIN', 'SUPERVISOR'].includes(req.user.role);
+    if (isAdminOrSupervisor) {
+      if (row.company_id !== req.user.companyId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+    } else if (row.office_id !== req.user.officeId) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    await pool.query(
+      `UPDATE geofences SET latitude = ?, longitude = ?, radius_meters = ? WHERE geofence_key = ?`,
+      [lat, lng, radius, geofenceKey]
+    );
+
+    const [out] = await pool.query(
+      `SELECT g.geofence_key, g.latitude, g.longitude, g.radius_meters, g.office_id, o.name AS office_name
+       FROM geofences g
+       JOIN offices o ON o.id = g.office_id
+       WHERE g.geofence_key = ?
+       LIMIT 1`,
+      [geofenceKey]
+    );
+    const g = out?.[0];
     return res.json({
       ok: true,
       item: {
@@ -62,28 +73,101 @@ module.exports = function registerGeofenceRoutes(app) {
         latitude: g.latitude,
         longitude: g.longitude,
         radiusMeters: g.radius_meters,
-        officeId: g.office_id
+        officeId: g.office_id,
+        officeName: g.office_name
       }
     });
   });
 
   app.get('/geofences', authRequired, async (req, res) => {
-    const { officeId } = req.user;
-    // For MVP, return only the authenticated office geofence.
+    const isAdminOrSupervisor = ['ADMIN', 'SUPERVISOR'].includes(req.user.role);
+    const { officeId, companyId } = req.user;
+
     const [rows] = await pool.query(
-      `SELECT geofence_key, latitude, longitude, radius_meters, office_id
-       FROM geofences g
-       WHERE g.office_id = ?`,
-      [officeId]
+      isAdminOrSupervisor
+        ? `SELECT g.geofence_key, g.latitude, g.longitude, g.radius_meters, g.office_id, o.name AS office_name
+           FROM geofences g
+           JOIN offices o ON o.id = g.office_id
+           WHERE o.company_id = ?
+           ORDER BY o.name ASC, g.geofence_key ASC`
+        : `SELECT g.geofence_key, g.latitude, g.longitude, g.radius_meters, g.office_id, o.name AS office_name
+           FROM geofences g
+           JOIN offices o ON o.id = g.office_id
+           WHERE g.office_id = ?
+           ORDER BY g.geofence_key ASC`,
+      isAdminOrSupervisor ? [companyId] : [officeId]
     );
+
     return res.json({
       items: (rows || []).map((g) => ({
         geofenceKey: g.geofence_key,
         latitude: g.latitude,
         longitude: g.longitude,
         radiusMeters: g.radius_meters,
-        officeId: g.office_id
+        officeId: g.office_id,
+        officeName: g.office_name
       }))
+    });
+  });
+
+  /**
+   * Creates a new office for the company and its geofence circle.
+   * Body: { officeName, geofenceKey?, latitude, longitude, radiusMeters }
+   */
+  app.post('/geofences', authRequired, requireRole('ADMIN', 'SUPERVISOR'), async (req, res) => {
+    const companyId = req.user.companyId;
+    const { officeName, geofenceKey, latitude, longitude, radiusMeters } = req.body || {};
+
+    const name = String(officeName || '').trim();
+    if (!name) {
+      return res.status(400).json({ error: 'officeName is required' });
+    }
+
+    const parsed = validateGeoBody(latitude, longitude, radiusMeters);
+    if (parsed.error) {
+      return res.status(400).json({ error: parsed.error });
+    }
+    const { lat, lng, radius } = parsed;
+
+    let key = geofenceKey != null ? String(geofenceKey).trim() : '';
+    if (!key) {
+      key = `gf-${uuidv4().replace(/-/g, '').slice(0, 12)}`;
+    } else {
+      const [dup] = await pool.query('SELECT id FROM geofences WHERE geofence_key = ? LIMIT 1', [key]);
+      if (dup?.length) {
+        return res.status(400).json({ error: 'geofenceKey already in use' });
+      }
+    }
+
+    const officeId = uuidv4();
+    const geofenceId = uuidv4();
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.query('INSERT INTO offices (id, company_id, name) VALUES (?, ?, ?)', [officeId, companyId, name]);
+      await conn.query(
+        'INSERT INTO geofences (id, office_id, geofence_key, latitude, longitude, radius_meters) VALUES (?, ?, ?, ?, ?, ?)',
+        [geofenceId, officeId, key, lat, lng, radius]
+      );
+      await conn.commit();
+    } catch (e) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
+    }
+
+    return res.status(201).json({
+      ok: true,
+      item: {
+        geofenceKey: key,
+        latitude: lat,
+        longitude: lng,
+        radiusMeters: radius,
+        officeId,
+        officeName: name
+      }
     });
   });
 
@@ -243,4 +327,3 @@ module.exports = function registerGeofenceRoutes(app) {
     res.type('html').send(html);
   });
 };
-
