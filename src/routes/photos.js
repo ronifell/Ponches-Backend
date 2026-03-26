@@ -228,6 +228,39 @@ function buildPhotoAttachmentName(file, fallbackPath) {
   return `${rawName}${fallbackExt}`;
 }
 
+function inferImageContentType(file, fallbackPath) {
+  const mime = String(file?.mimetype || '').trim().toLowerCase();
+  if (mime.startsWith('image/')) return mime;
+
+  const ext = path.extname(String(fallbackPath || '')).toLowerCase();
+  if (ext === '.png') return 'image/png';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.gif') return 'image/gif';
+  return 'image/jpeg';
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function buildSupervisorUploadEmailHtml({ supervisorText, imageCid }) {
+  const lines = String(supervisorText || '').split('\n');
+  const detailLines = lines.map((line) => `<div>${escapeHtml(line)}</div>`).join('');
+
+  return [
+    '<div style="font-family: Arial, sans-serif; color: #111; line-height: 1.5;">',
+    '<div style="margin-bottom: 12px;"><strong>Uploaded photo:</strong></div>',
+    `<div style="margin-bottom: 16px;"><img src="cid:${escapeHtml(imageCid)}" alt="Uploaded employee photo" style="max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 6px;" /></div>`,
+    detailLines,
+    '</div>'
+  ].join('');
+}
+
 function buildClientFileNameForGuard(file) {
   const name = String(file?.originalname || file?.filename || '').trim().toLowerCase();
   return name || 'unknown-upload.jpg';
@@ -397,15 +430,20 @@ module.exports = function registerPhotoRoutes(app) {
         await Promise.all(
           supervisors.map(async (s) => {
             if (s.email) {
+              const imageCid = `uploaded-photo-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@ponches`;
+              const attachmentFilename = buildPhotoAttachmentName(req.file, finalPath);
               await sendEmail({
                 to: s.email,
                 subject: supervisorSubject,
                 text: supervisorText,
+                html: buildSupervisorUploadEmailHtml({ supervisorText, imageCid }),
                 attachments: [
                   {
-                    filename: buildPhotoAttachmentName(req.file, finalPath),
+                    filename: attachmentFilename,
                     path: finalPath,
-                    ...(req.file?.mimetype ? { contentType: req.file.mimetype } : {})
+                    contentType: inferImageContentType(req.file, finalPath),
+                    contentDisposition: 'inline',
+                    cid: imageCid
                   }
                 ]
               });
