@@ -69,7 +69,14 @@ async function getSupervisorsForOffice(officeId) {
     'SELECT email, fcm_token FROM employees WHERE office_id = ? AND role = ? AND email IS NOT NULL',
     [officeId, 'SUPERVISOR']
   );
-  return rows || [];
+  const seenEmails = new Set();
+  return (rows || []).filter((row) => {
+    const email = String(row?.email || '').trim().toLowerCase();
+    if (!email) return false;
+    if (seenEmails.has(email)) return false;
+    seenEmails.add(email);
+    return true;
+  });
 }
 
 // Notifications can be duplicated if the mobile app retries the same upload (or submits twice).
@@ -157,6 +164,16 @@ function buildSupervisorUploadEmailText({
     `Validation Result: ${validation_result}`,
     `Validation Distance (m): ${validation_distance_meters ?? 'n/a'}`
   ].join('\n');
+}
+
+function buildPhotoAttachmentName(file, fallbackPath) {
+  const rawName = String(file?.originalname || '').trim();
+  const fallbackExt = path.extname(String(fallbackPath || '')) || '.jpg';
+  const rawExt = path.extname(rawName);
+
+  if (!rawName) return `uploaded-photo${fallbackExt}`;
+  if (rawExt) return rawName;
+  return `${rawName}${fallbackExt}`;
 }
 
 module.exports = function registerPhotoRoutes(app) {
@@ -311,8 +328,9 @@ module.exports = function registerPhotoRoutes(app) {
                 text: supervisorText,
                 attachments: [
                   {
-                    filename: req.file?.originalname || req.file?.filename || 'uploaded-photo.jpg',
-                    path: finalPath
+                    filename: buildPhotoAttachmentName(req.file, finalPath),
+                    path: finalPath,
+                    ...(req.file?.mimetype ? { contentType: req.file.mimetype } : {})
                   }
                 ]
               });
