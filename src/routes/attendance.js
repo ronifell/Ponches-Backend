@@ -113,8 +113,8 @@ module.exports = function registerAttendanceRoutes(app) {
       geofenceKey = null
     } = req.body || {};
 
-    if (!eventType || !officeId) {
-      return res.status(400).json({ error: 'eventType and officeId are required' });
+    if (!eventType) {
+      return res.status(400).json({ error: 'eventType is required' });
     }
     if (!['CHECK_IN', 'MOVEMENT', 'GEOFENCE_ENTER', 'GEOFENCE_EXIT', 'WORKDAY_CLOSED'].includes(eventType)) {
       return res.status(400).json({ error: 'Invalid eventType' });
@@ -123,18 +123,37 @@ module.exports = function registerAttendanceRoutes(app) {
       return res.status(400).json({ error: 'Invalid source' });
     }
 
-    // Validate company ownership
-    if (req.user.role !== 'ADMIN' && officeId !== req.user.officeId) {
-      // For MVP, only allow logging events for the authenticated office.
-      // (If you need cross-office employees, relax this rule.)
-      return res.status(403).json({ error: 'Forbidden office' });
+    const employeeId = req.user.employeeId;
+    const companyId = req.user.companyId;
+
+    const [empRows] = await pool.query(
+      'SELECT office_id, geofence_key FROM employees WHERE id = ? LIMIT 1',
+      [employeeId]
+    );
+    const emp = empRows?.[0];
+    if (!emp) {
+      return res.status(404).json({ error: 'Employee not found' });
     }
+
+    let resolvedOfficeId = emp.office_id;
+    if (req.user.role === 'ADMIN') {
+      if (!officeId) {
+        return res.status(400).json({ error: 'officeId is required' });
+      }
+      resolvedOfficeId = officeId;
+    } else if (officeId && officeId !== emp.office_id) {
+      return res.status(400).json({ error: 'officeId must match your assigned office' });
+    }
+
+    const resolvedGeofenceKey =
+      geofenceKey != null && geofenceKey !== ''
+        ? geofenceKey
+        : resolvedOfficeId === emp.office_id
+          ? emp.geofence_key
+          : null;
 
     const occurredAtDt = parseOccuredAt(occurredAt);
     const workday_date = toWorkdayDate(occurredAtDt);
-
-    const employeeId = req.user.employeeId;
-    const companyId = req.user.companyId;
 
     await pool.query(
       `INSERT INTO attendance_events
@@ -142,14 +161,14 @@ module.exports = function registerAttendanceRoutes(app) {
       VALUES (UUID(), ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         companyId,
-        officeId,
+        resolvedOfficeId,
         employeeId,
         eventType,
         manualClose ? 1 : 0,
         source,
         occurredAtDt.toSQL({ includeOffset: false }), // 'yyyy-LL-dd HH:mm:ss'
         workday_date,
-        geofenceKey
+        resolvedGeofenceKey
       ]
     );
 
@@ -157,24 +176,24 @@ module.exports = function registerAttendanceRoutes(app) {
     notifySuperManagerAttendanceRecord({
       companyId,
       employeeId,
-      officeId,
+      officeId: resolvedOfficeId,
       eventType,
       source,
       occurredAtFormatted,
       manualClose: Boolean(manualClose),
-      geofenceKey
+      geofenceKey: resolvedGeofenceKey
     }).catch((e) => console.warn('Super manager attendance email failed:', e.message || e));
 
     if (eventType === 'CHECK_IN') {
       // Best effort notifications (don't block API)
-      handleCheckInNotifications({ employeeId, officeId, occurredAtDt }).catch((e) =>
+      handleCheckInNotifications({ employeeId, officeId: resolvedOfficeId, occurredAtDt }).catch((e) =>
         console.warn('Late arrival notification failed:', e)
       );
     }
     if (eventType === 'WORKDAY_CLOSED') {
       handleWorkdayClosedNotifications({
         employeeId,
-        officeId,
+        officeId: resolvedOfficeId,
         manualClose: Boolean(manualClose),
         occurredAtDt
       }).catch((e) => console.warn('Workday close notification failed:', e));

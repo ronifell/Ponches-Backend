@@ -9,7 +9,7 @@ async function createEmployee(req, res) {
     password,
     fullName,
     companyId,
-    officeId,
+    geofenceKey,
     role = 'EMPLOYEE',
     email = null,
     employeeType = 'CENTRALIZED',
@@ -17,8 +17,8 @@ async function createEmployee(req, res) {
     isSupervisor = false
   } = req.body || {};
 
-  if (!employeeCode || !password || !fullName || !companyId || !officeId) {
-    return res.status(400).json({ error: 'employeeCode, password, fullName, companyId, officeId are required' });
+  if (!employeeCode || !password || !fullName || !companyId || !geofenceKey) {
+    return res.status(400).json({ error: 'employeeCode, password, fullName, companyId, geofenceKey are required' });
   }
 
   if (!['EMPLOYEE', 'SUPERVISOR', 'ADMIN'].includes(role)) {
@@ -28,11 +28,38 @@ async function createEmployee(req, res) {
     return res.status(400).json({ error: 'Invalid employeeType' });
   }
 
+  const [gfRows] = await pool.query(
+    `SELECT g.office_id
+     FROM geofences g
+     JOIN offices o ON o.id = g.office_id
+     WHERE g.geofence_key = ? AND o.company_id = ?
+     LIMIT 1`,
+    [geofenceKey, companyId]
+  );
+  const officeId = gfRows?.[0]?.office_id;
+  if (!officeId) {
+    return res.status(400).json({ error: 'Invalid geofenceKey for this company' });
+  }
+
   const employeeId = uuidv4();
   const passwordHash = await bcrypt.hash(password, 10);
-  const [result] = await pool.query(
-    'INSERT INTO employees (id, employee_code, company_id, office_id, role, full_name, password_hash, email, employee_type, supervisor_id, is_supervisor) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [employeeId, employeeCode, companyId, officeId, role, fullName, passwordHash, email, employeeType, supervisorId, isSupervisor ? 1 : 0]
+  await pool.query(
+    `INSERT INTO employees (id, employee_code, company_id, office_id, geofence_key, role, full_name, password_hash, email, employee_type, supervisor_id, is_supervisor)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      employeeId,
+      employeeCode,
+      companyId,
+      officeId,
+      geofenceKey,
+      role,
+      fullName,
+      passwordHash,
+      email,
+      employeeType,
+      supervisorId,
+      isSupervisor ? 1 : 0
+    ]
   );
 
   // `insertId` isn't meaningful for explicit UUIDs; return the generated ID.
@@ -42,7 +69,7 @@ async function createEmployee(req, res) {
 async function getEmployee(req, res) {
   const { id } = req.params;
   const [rows] = await pool.query(
-    'SELECT id, employee_code, company_id, office_id, role, full_name, email, fcm_token, employee_type, supervisor_id, is_supervisor FROM employees WHERE id = ? LIMIT 1',
+    'SELECT id, employee_code, company_id, office_id, geofence_key, role, full_name, email, fcm_token, employee_type, supervisor_id, is_supervisor FROM employees WHERE id = ? LIMIT 1',
     [id]
   );
   const employee = rows?.[0];
@@ -59,6 +86,7 @@ async function getEmployee(req, res) {
     employeeCode: employee.employee_code,
     companyId: employee.company_id,
     officeId: employee.office_id,
+    geofenceKey: employee.geofence_key,
     role: employee.role,
     employeeType: employee.employee_type,
     supervisorId: employee.supervisor_id,
@@ -71,7 +99,7 @@ async function getEmployee(req, res) {
 
 async function updateEmployee(req, res) {
   const { id } = req.params;
-  const { fullName, password, fcmToken, email, officeId, role, employeeType, supervisorId, isSupervisor } = req.body || {};
+  const { fullName, password, fcmToken, email, officeId, geofenceKey, role, employeeType, supervisorId, isSupervisor } = req.body || {};
 
   const [rows] = await pool.query('SELECT id, company_id FROM employees WHERE id = ? LIMIT 1', [id]);
   const existing = rows?.[0];
@@ -87,7 +115,7 @@ async function updateEmployee(req, res) {
 
   // Employees can update only their own profile fields; restrict sensitive changes.
   if (isSelf && req.user.role === 'EMPLOYEE') {
-    if (officeId !== undefined || role !== undefined) {
+    if (officeId !== undefined || geofenceKey !== undefined || role !== undefined) {
       return res.status(403).json({ error: 'Forbidden' });
     }
   }
@@ -107,7 +135,25 @@ async function updateEmployee(req, res) {
     updates.push('fcm_token = ?');
     params.push(fcmToken);
   }
-  if (officeId) {
+  if (geofenceKey !== undefined && isAdminOrSupervisor) {
+    if (geofenceKey === null || geofenceKey === '') {
+      updates.push('geofence_key = NULL');
+    } else {
+      const [gf] = await pool.query(
+        `SELECT g.office_id, g.geofence_key FROM geofences g
+         JOIN offices o ON o.id = g.office_id
+         WHERE g.geofence_key = ? AND o.company_id = ? LIMIT 1`,
+        [geofenceKey, req.user.companyId]
+      );
+      if (!gf?.length) {
+        return res.status(400).json({ error: 'Invalid geofenceKey for this company' });
+      }
+      updates.push('office_id = ?');
+      params.push(gf[0].office_id);
+      updates.push('geofence_key = ?');
+      params.push(geofenceKey);
+    }
+  } else if (officeId) {
     updates.push('office_id = ?');
     params.push(officeId);
   }

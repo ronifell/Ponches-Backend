@@ -40,12 +40,13 @@ async function seedOnce() {
     const employeeId = uuidv4();
 
     await conn.query(
-      'INSERT INTO employees (id, employee_code, company_id, office_id, role, full_name, password_hash, email, fcm_token, employee_type, is_supervisor) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO employees (id, employee_code, company_id, office_id, geofence_key, role, full_name, password_hash, email, fcm_token, employee_type, is_supervisor) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [
         supervisorId,
         'SUP001',
         companyId,
         officeId,
+        'office-demo',
         'SUPERVISOR',
         'Demo Supervisor',
         await bcrypt.hash('sup123456', 10),
@@ -57,12 +58,13 @@ async function seedOnce() {
     );
 
     await conn.query(
-      'INSERT INTO employees (id, employee_code, company_id, office_id, role, full_name, password_hash, email, fcm_token, employee_type, supervisor_id, is_supervisor) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO employees (id, employee_code, company_id, office_id, geofence_key, role, full_name, password_hash, email, fcm_token, employee_type, supervisor_id, is_supervisor) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [
         employeeId,
         DEFAULT_EMPLOYEE_CODE,
         companyId,
         officeId,
+        'office-demo',
         'EMPLOYEE',
         'Demo Employee',
         passwordHash,

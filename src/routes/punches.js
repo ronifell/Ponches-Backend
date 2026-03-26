@@ -25,6 +25,20 @@ async function getOfficeGeofence(officeId) {
   return rows?.[0] || null;
 }
 
+async function getGeofenceForPunch(officeId, geofenceKey) {
+  if (geofenceKey) {
+    const [rows] = await pool.query(
+      `SELECT latitude, longitude, radius_meters
+       FROM geofences
+       WHERE geofence_key = ? AND office_id = ?
+       LIMIT 1`,
+      [geofenceKey, officeId]
+    );
+    return rows?.[0] || null;
+  }
+  return getOfficeGeofence(officeId);
+}
+
 function distanceMeters(lat1, lng1, lat2, lng2) {
   const toRad = (v) => (v * Math.PI) / 180;
   const R = 6371000;
@@ -60,8 +74,21 @@ module.exports = function registerPunchRoutes(app) {
   app.post('/punches', authRequired, async (req, res) => {
     const employeeId = req.user.employeeId;
     const companyId = req.user.companyId;
-    const officeId = req.body?.officeId || req.user.officeId;
     const { latitude, longitude, occurredAt, endWorkday = false } = req.body || {};
+
+    const [empRows] = await pool.query(
+      'SELECT office_id, geofence_key FROM employees WHERE id = ? LIMIT 1',
+      [employeeId]
+    );
+    const emp = empRows?.[0];
+    if (!emp) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    let officeId = emp.office_id;
+    if (req.user.role === 'ADMIN' && req.body?.officeId) {
+      officeId = req.body.officeId;
+    }
 
     const lat = Number(latitude);
     const lng = Number(longitude);
@@ -72,14 +99,15 @@ module.exports = function registerPunchRoutes(app) {
       return res.status(400).json({ error: 'Invalid latitude/longitude range' });
     }
 
-    if (req.user.role !== 'ADMIN' && officeId !== req.user.officeId) {
+    if (req.user.role !== 'ADMIN' && officeId !== emp.office_id) {
       return res.status(403).json({ error: 'Forbidden office' });
     }
 
     const occurredAtDt = parseOccuredAt(occurredAt);
     const workdayDate = toWorkdayDate(occurredAtDt);
     const employeeType = await getEmployeeType(employeeId);
-    const geofence = await getOfficeGeofence(officeId);
+    const geofenceKeyForCircle = officeId === emp.office_id ? emp.geofence_key : null;
+    const geofence = await getGeofenceForPunch(officeId, geofenceKeyForCircle);
     const insideGeofence = geofence
       ? distanceMeters(geofence.latitude, geofence.longitude, lat, lng) <= Number(geofence.radius_meters)
       : false;

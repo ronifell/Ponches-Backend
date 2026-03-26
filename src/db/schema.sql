@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS employees (
   employee_code VARCHAR(64) NOT NULL UNIQUE, -- "Employee ID" used by the app
   company_id CHAR(36) NOT NULL,
   office_id CHAR(36) NOT NULL,
+  geofence_key VARCHAR(64) NULL,
   role ENUM('EMPLOYEE','SUPERVISOR','ADMIN') NOT NULL DEFAULT 'EMPLOYEE',
   full_name VARCHAR(255) NOT NULL,
   password_hash VARCHAR(255) NOT NULL,
@@ -40,7 +41,8 @@ CREATE TABLE IF NOT EXISTS employees (
   email VARCHAR(255) NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_employees_company FOREIGN KEY (company_id) REFERENCES companies(id),
-  CONSTRAINT fk_employees_office FOREIGN KEY (office_id) REFERENCES offices(id)
+  CONSTRAINT fk_employees_office FOREIGN KEY (office_id) REFERENCES offices(id),
+  CONSTRAINT fk_employees_geofence FOREIGN KEY (geofence_key) REFERENCES geofences(geofence_key)
 ) ENGINE=InnoDB;
 
 ALTER TABLE employees

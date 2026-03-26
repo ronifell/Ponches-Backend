@@ -10,7 +10,7 @@ async function login(req, res) {
   }
 
   const [rows] = await pool.query(
-    `SELECT e.id, e.employee_code, e.company_id, e.office_id, e.role, e.full_name, e.password_hash, e.employee_type, e.supervisor_id, e.is_supervisor, o.name AS office_name
+    `SELECT e.id, e.employee_code, e.company_id, e.office_id, e.geofence_key, e.role, e.full_name, e.password_hash, e.employee_type, e.supervisor_id, e.is_supervisor, o.name AS office_name
      FROM employees e
      LEFT JOIN offices o ON o.id = e.office_id
      WHERE e.employee_code = ? LIMIT 1`,
@@ -27,6 +27,7 @@ async function login(req, res) {
       employeeId: employee.id,
       companyId: employee.company_id,
       officeId: employee.office_id,
+      geofenceKey: employee.geofence_key || null,
       role: employee.role
     },
     env.jwt.secret,
@@ -44,6 +45,7 @@ async function login(req, res) {
       isSupervisor: Boolean(employee.is_supervisor),
       fullName: employee.full_name,
       officeId: employee.office_id,
+      geofenceKey: employee.geofence_key || null,
       officeName: employee.office_name || 'Office',
       companyId: employee.company_id
     }

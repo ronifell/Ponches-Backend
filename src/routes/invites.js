@@ -57,6 +57,15 @@ async function createInvite(req, res) {
     return res.status(400).json({ error: 'Invalid office or company' });
   }
 
+  const [gfRows] = await pool.query(
+    'SELECT geofence_key FROM geofences WHERE office_id = ? ORDER BY geofence_key ASC LIMIT 1',
+    [officeId]
+  );
+  const defaultGeofenceKey = gfRows?.[0]?.geofence_key;
+  if (!defaultGeofenceKey) {
+    return res.status(400).json({ error: 'No geofence configured for this office' });
+  }
+
   const employeeId = uuidv4();
   const tempPassword = crypto.randomBytes(24).toString('base64url');
   const passwordHash = await bcrypt.hash(tempPassword, 10);
@@ -64,9 +73,9 @@ async function createInvite(req, res) {
   const expiresAt = new Date(Date.now() + INVITE_VALID_HOURS * 60 * 60 * 1000);
 
   await pool.query(
-    `INSERT INTO employees (id, employee_code, company_id, office_id, role, full_name, password_hash, email)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [employeeId, employeeCode, companyId, officeId, role, fullName, passwordHash, email]
+    `INSERT INTO employees (id, employee_code, company_id, office_id, geofence_key, role, full_name, password_hash, email)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [employeeId, employeeCode, companyId, officeId, defaultGeofenceKey, role, fullName, passwordHash, email]
   );
 
   await pool.query(

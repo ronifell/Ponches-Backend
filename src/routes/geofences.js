@@ -48,8 +48,22 @@ module.exports = function registerGeofenceRoutes(app) {
       if (row.company_id !== req.user.companyId) {
         return res.status(403).json({ error: 'Forbidden' });
       }
-    } else if (row.office_id !== req.user.officeId) {
-      return res.status(403).json({ error: 'Forbidden' });
+    } else {
+      const [empRows] = await pool.query(
+        'SELECT office_id, geofence_key FROM employees WHERE id = ? LIMIT 1',
+        [req.user.employeeId]
+      );
+      const emp = empRows?.[0];
+      if (!emp) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+      if (emp.geofence_key) {
+        if (geofenceKey !== emp.geofence_key) {
+          return res.status(403).json({ error: 'Forbidden' });
+        }
+      } else if (row.office_id !== emp.office_id) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
     }
 
     await pool.query(
@@ -93,9 +107,14 @@ module.exports = function registerGeofenceRoutes(app) {
         : `SELECT g.geofence_key, g.latitude, g.longitude, g.radius_meters, g.office_id, o.name AS office_name
            FROM geofences g
            JOIN offices o ON o.id = g.office_id
-           WHERE g.office_id = ?
+           JOIN employees e ON e.id = ?
+           WHERE o.company_id = e.company_id
+             AND (
+               (e.geofence_key IS NOT NULL AND g.geofence_key = e.geofence_key)
+               OR (e.geofence_key IS NULL AND g.office_id = e.office_id)
+             )
            ORDER BY g.geofence_key ASC`,
-      isAdminOrSupervisor ? [companyId] : [officeId]
+      isAdminOrSupervisor ? [companyId] : [req.user.employeeId]
     );
 
     return res.json({
