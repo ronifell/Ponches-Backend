@@ -44,6 +44,26 @@ async function getEmployeeContacts(employeeId) {
   return rows?.[0] || null;
 }
 
+async function getEmployeeNotificationDetails(employeeId) {
+  const [rows] = await pool.query(
+    `SELECT
+      e.id,
+      e.employee_code,
+      e.full_name,
+      e.email,
+      e.office_id,
+      o.name AS office_name,
+      c.name AS company_name
+     FROM employees e
+     LEFT JOIN offices o ON o.id = e.office_id
+     LEFT JOIN companies c ON c.id = e.company_id
+     WHERE e.id = ?
+     LIMIT 1`,
+    [employeeId]
+  );
+  return rows?.[0] || null;
+}
+
 async function getSupervisorsForOffice(officeId) {
   const [rows] = await pool.query(
     'SELECT email, fcm_token FROM employees WHERE office_id = ? AND role = ? AND email IS NOT NULL',
@@ -106,6 +126,37 @@ async function releasePhotoNotificationGuard({
      WHERE company_id = ? AND employee_id = ? AND order_number = ? AND work_type = ? AND validation_result = ?`,
     [companyId, employeeId, orderNumber, String(workType), validationResult]
   );
+}
+
+function buildSupervisorUploadEmailText({
+  employeeDetails,
+  normalizedOrderNumberStr,
+  workType,
+  lat,
+  lng,
+  occurredAtSql,
+  validation_result,
+  validation_distance_meters
+}) {
+  return [
+    'A new employee photo has been uploaded.',
+    '',
+    `Employee Name: ${employeeDetails?.full_name || 'n/a'}`,
+    `Employee Code: ${employeeDetails?.employee_code || 'n/a'}`,
+    `Employee ID: ${employeeDetails?.id || 'n/a'}`,
+    `Employee Email: ${employeeDetails?.email || 'n/a'}`,
+    `Company: ${employeeDetails?.company_name || 'n/a'}`,
+    `Office: ${employeeDetails?.office_name || 'n/a'}`,
+    `Office ID: ${employeeDetails?.office_id || 'n/a'}`,
+    '',
+    `Order Number: ${normalizedOrderNumberStr}`,
+    `Work Type: ${String(workType)}`,
+    `Occurred At: ${occurredAtSql}`,
+    `Latitude: ${lat}`,
+    `Longitude: ${lng}`,
+    `Validation Result: ${validation_result}`,
+    `Validation Distance (m): ${validation_distance_meters ?? 'n/a'}`
+  ].join('\n');
 }
 
 module.exports = function registerPhotoRoutes(app) {
@@ -237,6 +288,38 @@ module.exports = function registerPhotoRoutes(app) {
 
       // Email/FCM must not fail the upload if SMTP or push is unreachable (e.g. ETIMEDOUT to internal relay).
       try {
+        const employeeDetails = await getEmployeeNotificationDetails(employeeId);
+        const supervisors = await getSupervisorsForOffice(officeId);
+        const supervisorSubject = `Employee photo uploaded (${normalizedOrderNumberStr})`;
+        const supervisorText = buildSupervisorUploadEmailText({
+          employeeDetails,
+          normalizedOrderNumberStr,
+          workType,
+          lat,
+          lng,
+          occurredAtSql,
+          validation_result,
+          validation_distance_meters
+        });
+
+        await Promise.all(
+          supervisors.map(async (s) => {
+            if (s.email) {
+              await sendEmail({
+                to: s.email,
+                subject: supervisorSubject,
+                text: supervisorText,
+                attachments: [
+                  {
+                    filename: req.file?.originalname || req.file?.filename || 'uploaded-photo.jpg',
+                    path: finalPath
+                  }
+                ]
+              });
+            }
+          })
+        );
+
         if (validation_result === 'REJECTED') {
           const shouldNotify = await tryAcquirePhotoNotificationGuard({
             companyId,
@@ -248,7 +331,6 @@ module.exports = function registerPhotoRoutes(app) {
 
           if (shouldNotify) {
             try {
-              const supervisors = await getSupervisorsForOffice(officeId);
               const subject = `Photo validation failed (${normalizedOrderNumberStr})`;
               const text = `A photo for order ${normalizedOrderNumberStr} was rejected (distance=${validation_distance_meters ?? 'n/a'}m).`;
 
@@ -261,13 +343,6 @@ module.exports = function registerPhotoRoutes(app) {
                     : Promise.resolve()
                 ]);
               }
-
-              await Promise.all(
-                supervisors.map(async (s) => {
-                  if (s.email) await sendEmail({ to: s.email, subject, text });
-                  if (s.fcm_token) await sendFcm({ toToken: s.fcm_token, title: 'Photo validation failed', body: text });
-                })
-              );
             } catch (innerErr) {
               await releasePhotoNotificationGuard({
                 companyId,

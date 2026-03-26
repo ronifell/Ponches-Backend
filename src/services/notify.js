@@ -1,7 +1,7 @@
 const nodemailer = require('nodemailer');
 const env = require('../config/env');
 
-async function sendEmail({ to, subject, text }) {
+async function sendEmail({ to, subject, text, attachments = [] }) {
   if (!env.mail.smtpHost || !env.mail.smtpUser || !env.mail.smtpPass) {
     // Avoid crashing if not configured; useful for local dev.
     console.warn('SMTP not configured, skipping email:', { to, subject });
@@ -26,7 +26,8 @@ async function sendEmail({ to, subject, text }) {
       from: env.mail.mailFrom,
       to,
       subject,
-      text
+      text,
+      ...(Array.isArray(attachments) && attachments.length > 0 ? { attachments } : {})
     });
   } catch (e) {
     const hint =
