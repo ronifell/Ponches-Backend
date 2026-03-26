@@ -52,6 +52,47 @@ async function getSupervisorsForOffice(officeId) {
   return rows || [];
 }
 
+// Notifications can be duplicated if the mobile app retries the same upload (or submits twice).
+// To make notification sending concurrency-safe, we use a DB guard table with a unique key.
+let photoNotificationGuardsEnsured = false;
+async function ensurePhotoNotificationGuardsTable() {
+  if (photoNotificationGuardsEnsured) return;
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS photo_notification_guards (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      company_id CHAR(36) NOT NULL,
+      employee_id CHAR(36) NOT NULL,
+      order_number VARCHAR(128) NOT NULL,
+      work_type VARCHAR(128) NOT NULL,
+      validation_result ENUM('APPROVED','REJECTED','UNKNOWN') NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_photo_notification_guard (
+        company_id, employee_id, order_number, work_type, validation_result
+      )
+    ) ENGINE=InnoDB;`
+  );
+  photoNotificationGuardsEnsured = true;
+}
+
+async function tryAcquirePhotoNotificationGuard({
+  companyId,
+  employeeId,
+  orderNumber,
+  workType,
+  validationResult
+}) {
+  await ensurePhotoNotificationGuardsTable();
+  const [result] = await pool.query(
+    `INSERT IGNORE INTO photo_notification_guards
+      (company_id, employee_id, order_number, work_type, validation_result)
+     VALUES (?, ?, ?, ?, ?)`,
+    [companyId, employeeId, orderNumber, String(workType), validationResult]
+  );
+
+  // INSERT IGNORE sets affectedRows to 1 when inserted, 0 when duplicate.
+  return result?.affectedRows === 1;
+}
+
 module.exports = function registerPhotoRoutes(app) {
   app.post('/photos', authRequired, upload.single('photo'), async (req, res) => {
     try {
@@ -182,6 +223,15 @@ module.exports = function registerPhotoRoutes(app) {
       // Email/FCM must not fail the upload if SMTP or push is unreachable (e.g. ETIMEDOUT to internal relay).
       try {
         if (validation_result === 'REJECTED') {
+          const shouldNotify = await tryAcquirePhotoNotificationGuard({
+            companyId,
+            employeeId,
+            orderNumber: normalizedOrderNumberStr,
+            workType: String(workType),
+            validationResult: validation_result
+          });
+
+          if (shouldNotify) {
           const supervisors = await getSupervisorsForOffice(officeId);
           const subject = `Photo validation failed (${normalizedOrderNumberStr})`;
           const text = `A photo for order ${normalizedOrderNumberStr} was rejected (distance=${validation_distance_meters ?? 'n/a'}m).`;
@@ -200,7 +250,17 @@ module.exports = function registerPhotoRoutes(app) {
               if (s.fcm_token) await sendFcm({ toToken: s.fcm_token, title: 'Photo validation failed', body: text });
             })
           );
+          }
         } else if (validation_result === 'APPROVED') {
+          const shouldNotify = await tryAcquirePhotoNotificationGuard({
+            companyId,
+            employeeId,
+            orderNumber: normalizedOrderNumberStr,
+            workType: String(workType),
+            validationResult: validation_result
+          });
+
+          if (shouldNotify) {
           const employee = await getEmployeeContacts(employeeId);
           if (employee && (employee.email || employee.fcm_token)) {
             const subject = `Photo approved (${normalizedOrderNumberStr})`;
@@ -209,6 +269,7 @@ module.exports = function registerPhotoRoutes(app) {
               employee.email ? sendEmail({ to: employee.email, subject, text }) : Promise.resolve(),
               employee.fcm_token ? sendFcm({ toToken: employee.fcm_token, title: 'Photo approved', body: text }) : Promise.resolve()
             ]);
+          }
           }
         }
       } catch (notifyErr) {
