@@ -145,6 +145,23 @@ async function updateEmployee(req, res) {
 
 module.exports = function registerEmployeeRoutes(app) {
   app.post('/employees', authRequired, requireRole('ADMIN', 'SUPERVISOR'), createEmployee);
+  app.get('/employees', authRequired, requireRole('ADMIN', 'SUPERVISOR'), async (req, res) => {
+    const [rows] = await pool.query(
+      `SELECT id, employee_code, full_name, role
+       FROM employees
+       WHERE company_id = ?
+       ORDER BY full_name ASC`,
+      [req.user.companyId]
+    );
+    return res.json({
+      items: (rows || []).map((r) => ({
+        id: r.id,
+        employeeCode: r.employee_code,
+        fullName: r.full_name,
+        role: r.role
+      }))
+    });
+  });
   app.get('/employees/:id', authRequired, getEmployee);
   app.put('/employees/:id', authRequired, updateEmployee);
 };
