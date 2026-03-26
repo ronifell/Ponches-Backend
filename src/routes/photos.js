@@ -274,6 +274,16 @@ module.exports = function registerPhotoRoutes(app) {
       const employeeId = req.user.employeeId;
       const companyId = req.user.companyId;
       const officeId = req.user.officeId;
+      const role = req.user.role;
+
+      if (role === 'SUPERVISOR') {
+        try {
+          if (req.file?.path && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+        } catch (e) {
+          console.warn('Supervisor upload blocked: failed to delete temp file:', e?.message || e);
+        }
+        return res.status(403).json({ error: 'Supervisors are not allowed to upload photos' });
+      }
 
       const {
         orderNumber: rawOrderNumber,
