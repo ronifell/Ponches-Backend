@@ -8,7 +8,10 @@ const pool = mysql.createPool({
   password: env.db.password,
   database: env.db.name,
   connectionLimit: env.db.connLimit,
-  timezone: 'Z'
+  // Attendance/punch DATETIME values are stored in Dominican local time.
+  // Use a fixed -04:00 offset when reading/writing through mysql2 to avoid
+  // a 4-hour UTC shift in API responses/UI.
+  timezone: '-04:00'
 });
 
 module.exports = { pool };
