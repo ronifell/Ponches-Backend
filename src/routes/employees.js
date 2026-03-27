@@ -45,7 +45,7 @@ async function createEmployee(req, res) {
   const passwordHash = await bcrypt.hash(password, 10);
   await pool.query(
     `INSERT INTO employees (id, employee_code, company_id, office_id, geofence_key, role, full_name, password_hash, email, employee_type, supervisor_id, is_supervisor)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       employeeId,
       employeeCode,
