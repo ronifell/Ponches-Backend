@@ -170,7 +170,10 @@ module.exports = function registerQualityRoutes(app) {
   app.post('/quality/:qualityId/photos', authRequired, upload.single('photo'), async (req, res) => {
     await ensureQualitiesStbCountColumn();
     const { qualityId } = req.params;
-    const { photoType = 'GENERAL', fe = false, feComment = null } = req.body || {};
+    const body = req.body || {};
+    const photoTypeRaw = body.photoType ?? body['photo-type'];
+    const feRaw = body.fe;
+    const feCommentRaw = body.feComment ?? body.fe_comment;
     if (!req.file) return res.status(400).json({ error: 'Missing photo file' });
 
     const [qualityRows] = await pool.query(
@@ -181,14 +184,18 @@ module.exports = function registerQualityRoutes(app) {
     if (!quality) return res.status(404).json({ error: 'Quality not found' });
     if (quality.company_id !== req.user.companyId) return res.status(403).json({ error: 'Forbidden' });
 
-    const feOn = fe === true || fe === 'true';
-    const normalizedComment = String(feComment || '').trim();
+    const feOn =
+      feRaw === true ||
+      feRaw === 'true' ||
+      feRaw === '1' ||
+      String(feRaw || '').toLowerCase() === 'true';
+    const normalizedComment = String(feCommentRaw || '').trim();
     if (feOn && !normalizedComment) {
       return res.status(400).json({ error: 'feComment is required when FE is true' });
     }
 
-    const normalizedPhotoType = normalizePhotoType(photoType);
-    const stbCount = quality.stb_count != null ? quality.stb_count : 1;
+    const normalizedPhotoType = normalizePhotoType(photoTypeRaw);
+    const stbCount = Number(quality.stb_count) || 1;
     const required = requiredPhotoTypesForWorkType(quality.work_type, stbCount);
     if (required.length > 0 && !required.includes(normalizedPhotoType)) {
       return res.status(400).json({
