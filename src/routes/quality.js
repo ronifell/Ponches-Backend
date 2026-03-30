@@ -227,6 +227,47 @@ module.exports = function registerQualityRoutes(app) {
     return res.status(201).json({ id: photoId, photoUrl, ok: true });
   });
 
+  app.post('/quality/:qualityId/complete', authRequired, async (req, res) => {
+    await ensureQualitiesStbCountColumn();
+    const { qualityId } = req.params;
+
+    const [qualityRows] = await pool.query(
+      'SELECT id, company_id, work_type, stb_count, status FROM qualities WHERE id = ? LIMIT 1',
+      [qualityId]
+    );
+    const quality = qualityRows?.[0];
+    if (!quality) return res.status(404).json({ error: 'Quality not found' });
+    if (quality.company_id !== req.user.companyId) return res.status(403).json({ error: 'Forbidden' });
+
+    const required = requiredPhotoTypesForWorkType(quality.work_type, Number(quality.stb_count) || 1);
+    if (required.length === 0) {
+      return res.status(400).json({ error: 'No required photo catalog found for this work type' });
+    }
+
+    const [uploadedRows] = await pool.query(
+      `SELECT DISTINCT photo_type
+       FROM quality_photos
+       WHERE quality_id = ?`,
+      [qualityId]
+    );
+    const uploadedSet = new Set((uploadedRows || []).map((r) => String(r.photo_type || '').trim().toUpperCase()));
+    const missing = required.filter((slot) => !uploadedSet.has(String(slot).trim().toUpperCase()));
+    if (missing.length > 0) {
+      return res.status(400).json({
+        error: 'Missing required photos before completing the order',
+        missingPhotoTypes: missing
+      });
+    }
+
+    await pool.query(
+      `UPDATE qualities
+       SET status = 'IN_REVIEW', updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [qualityId]
+    );
+    return res.json({ ok: true, status: 'IN_REVIEW' });
+  });
+
   app.get('/quality', authRequired, async (req, res) => {
     await ensureQualitiesStbCountColumn();
     const [rows] = await pool.query(
