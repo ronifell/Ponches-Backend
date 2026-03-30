@@ -24,7 +24,7 @@ function getInviteBaseUrl(req) {
  * Returns: { inviteUrl, token, expiresAt, employeeId }
  */
 async function createInvite(req, res) {
-  const { employeeCode, fullName, companyId, officeId, role = 'EMPLOYEE', email = null } = req.body || {};
+  const { employeeCode, fullName, companyId, officeId, role = 'EMPLOYEE', email = null, supervisorId = null } = req.body || {};
 
   if (!employeeCode || !fullName || !companyId || !officeId) {
     return res.status(400).json({
@@ -34,6 +34,9 @@ async function createInvite(req, res) {
 
   if (!['EMPLOYEE', 'SUPERVISOR', 'ADMIN'].includes(role)) {
     return res.status(400).json({ error: 'Invalid role' });
+  }
+  if (req.user.role === 'SUPERVISOR' && role !== 'EMPLOYEE') {
+    return res.status(403).json({ error: 'Supervisors can only invite EMPLOYEE users' });
   }
 
   // Ensure requester has access to this company
@@ -72,10 +75,32 @@ async function createInvite(req, res) {
   const token = generateSecureToken();
   const expiresAt = new Date(Date.now() + INVITE_VALID_HOURS * 60 * 60 * 1000);
 
+  let resolvedSupervisorId = supervisorId;
+  if (role === 'EMPLOYEE') {
+    if (req.user.role === 'SUPERVISOR') {
+      resolvedSupervisorId = req.user.employeeId;
+    }
+    if (!resolvedSupervisorId) {
+      return res.status(400).json({ error: 'supervisorId is required for EMPLOYEE users' });
+    }
+    const [supRows] = await pool.query(
+      `SELECT id
+       FROM employees
+       WHERE id = ? AND company_id = ? AND role = 'SUPERVISOR'
+       LIMIT 1`,
+      [resolvedSupervisorId, companyId]
+    );
+    if (!supRows?.length) {
+      return res.status(400).json({ error: 'Invalid supervisorId for this company' });
+    }
+  } else {
+    resolvedSupervisorId = null;
+  }
+
   await pool.query(
-    `INSERT INTO employees (id, employee_code, company_id, office_id, geofence_key, role, full_name, password_hash, email)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [employeeId, employeeCode, companyId, officeId, defaultGeofenceKey, role, fullName, passwordHash, email]
+    `INSERT INTO employees (id, employee_code, company_id, office_id, geofence_key, role, full_name, password_hash, email, supervisor_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [employeeId, employeeCode, companyId, officeId, defaultGeofenceKey, role, fullName, passwordHash, email, resolvedSupervisorId]
   );
 
   await pool.query(

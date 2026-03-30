@@ -24,8 +24,14 @@ async function createEmployee(req, res) {
   if (!['EMPLOYEE', 'SUPERVISOR', 'ADMIN'].includes(role)) {
     return res.status(400).json({ error: 'Invalid role' });
   }
+  if (req.user.role === 'SUPERVISOR' && role !== 'EMPLOYEE') {
+    return res.status(403).json({ error: 'Supervisors can only create EMPLOYEE users' });
+  }
   if (!['CENTRALIZED', 'DECENTRALIZED'].includes(employeeType)) {
     return res.status(400).json({ error: 'Invalid employeeType' });
+  }
+  if (req.user.companyId && req.user.companyId !== companyId) {
+    return res.status(403).json({ error: 'Forbidden: cannot create employee in another company' });
   }
 
   const [gfRows] = await pool.query(
@@ -39,6 +45,29 @@ async function createEmployee(req, res) {
   const officeId = gfRows?.[0]?.office_id;
   if (!officeId) {
     return res.status(400).json({ error: 'Invalid geofenceKey for this company' });
+  }
+
+  let resolvedSupervisorId = supervisorId;
+  if (role === 'EMPLOYEE') {
+    if (req.user.role === 'SUPERVISOR') {
+      // Employees created by a supervisor are always assigned to that supervisor.
+      resolvedSupervisorId = req.user.employeeId;
+    }
+    if (!resolvedSupervisorId) {
+      return res.status(400).json({ error: 'supervisorId is required for EMPLOYEE users' });
+    }
+    const [supRows] = await pool.query(
+      `SELECT id
+       FROM employees
+       WHERE id = ? AND company_id = ? AND role = 'SUPERVISOR'
+       LIMIT 1`,
+      [resolvedSupervisorId, companyId]
+    );
+    if (!supRows?.length) {
+      return res.status(400).json({ error: 'Invalid supervisorId for this company' });
+    }
+  } else {
+    resolvedSupervisorId = null;
   }
 
   const employeeId = uuidv4();
@@ -57,7 +86,7 @@ async function createEmployee(req, res) {
       passwordHash,
       email,
       employeeType,
-      supervisorId,
+      resolvedSupervisorId,
       isSupervisor ? 1 : 0
     ]
   );
@@ -76,7 +105,16 @@ async function getEmployee(req, res) {
   if (!employee) return res.status(404).json({ error: 'Employee not found' });
 
   const requesterCompanyId = req.user?.companyId;
-  if (req.user?.role !== 'ADMIN' && requesterCompanyId && employee.company_id !== requesterCompanyId) {
+  if (requesterCompanyId && employee.company_id !== requesterCompanyId) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  if (req.user?.role === 'SUPERVISOR') {
+    const isSelf = req.user.employeeId === employee.id;
+    const managesEmployee = employee.supervisor_id === req.user.employeeId;
+    if (!isSelf && !managesEmployee) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+  } else if (req.user?.role !== 'ADMIN' && req.user?.employeeId !== employee.id) {
     return res.status(403).json({ error: 'Forbidden' });
   }
 
@@ -101,7 +139,10 @@ async function updateEmployee(req, res) {
   const { id } = req.params;
   const { fullName, password, fcmToken, email, officeId, geofenceKey, role, employeeType, supervisorId, isSupervisor } = req.body || {};
 
-  const [rows] = await pool.query('SELECT id, company_id FROM employees WHERE id = ? LIMIT 1', [id]);
+  const [rows] = await pool.query(
+    'SELECT id, company_id, role, supervisor_id FROM employees WHERE id = ? LIMIT 1',
+    [id]
+  );
   const existing = rows?.[0];
   if (!existing) return res.status(404).json({ error: 'Employee not found' });
 
@@ -111,10 +152,13 @@ async function updateEmployee(req, res) {
   if (!isSelf) {
     if (!isAdminOrSupervisor) return res.status(403).json({ error: 'Forbidden' });
     if (existing.company_id !== req.user.companyId) return res.status(403).json({ error: 'Forbidden' });
+    if (req.user.role === 'SUPERVISOR' && existing.supervisor_id !== req.user.employeeId) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
   }
 
   // Employees can update only their own profile fields; restrict sensitive changes.
-  if (isSelf && req.user.role === 'EMPLOYEE') {
+  if (isSelf && ['EMPLOYEE', 'SUPERVISOR'].includes(req.user.role)) {
     if (officeId !== undefined || geofenceKey !== undefined || role !== undefined) {
       return res.status(403).json({ error: 'Forbidden' });
     }
@@ -159,6 +203,9 @@ async function updateEmployee(req, res) {
   }
   if (role) {
     if (!['EMPLOYEE', 'SUPERVISOR', 'ADMIN'].includes(role)) return res.status(400).json({ error: 'Invalid role' });
+    if (req.user.role === 'SUPERVISOR' && role !== 'EMPLOYEE') {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
     updates.push('role = ?');
     params.push(role);
   }
@@ -170,8 +217,30 @@ async function updateEmployee(req, res) {
     params.push(employeeType);
   }
   if (supervisorId !== undefined) {
+    const nextRole = role || existing.role;
+    if (nextRole !== 'EMPLOYEE') {
+      return res.status(400).json({ error: 'Only EMPLOYEE users can have supervisorId' });
+    }
+    if (!supervisorId) {
+      return res.status(400).json({ error: 'supervisorId is required for EMPLOYEE users' });
+    }
+    if (req.user.role === 'SUPERVISOR' && supervisorId !== req.user.employeeId) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    const [supRows] = await pool.query(
+      `SELECT id
+       FROM employees
+       WHERE id = ? AND company_id = ? AND role = 'SUPERVISOR'
+       LIMIT 1`,
+      [supervisorId, req.user.companyId]
+    );
+    if (!supRows?.length) {
+      return res.status(400).json({ error: 'Invalid supervisorId for this company' });
+    }
     updates.push('supervisor_id = ?');
     params.push(supervisorId);
+  } else if (role === 'EMPLOYEE' && !existing.supervisor_id) {
+    return res.status(400).json({ error: 'supervisorId is required for EMPLOYEE users' });
   }
   if (isSupervisor !== undefined) {
     updates.push('is_supervisor = ?');
@@ -192,13 +261,24 @@ async function updateEmployee(req, res) {
 module.exports = function registerEmployeeRoutes(app) {
   app.post('/employees', authRequired, requireRole('ADMIN', 'SUPERVISOR'), createEmployee);
   app.get('/employees', authRequired, requireRole('ADMIN', 'SUPERVISOR'), async (req, res) => {
-    const [rows] = await pool.query(
-      `SELECT id, employee_code, full_name, role
-       FROM employees
-       WHERE company_id = ?
-       ORDER BY full_name ASC`,
-      [req.user.companyId]
-    );
+    const isAdmin = req.user.role === 'ADMIN';
+    const [rows] = isAdmin
+      ? await pool.query(
+        `SELECT id, employee_code, full_name, role
+         FROM employees
+         WHERE company_id = ?
+         ORDER BY full_name ASC`,
+        [req.user.companyId]
+      )
+      : await pool.query(
+        `SELECT id, employee_code, full_name, role
+         FROM employees
+         WHERE company_id = ?
+           AND role = 'EMPLOYEE'
+           AND supervisor_id = ?
+         ORDER BY full_name ASC`,
+        [req.user.companyId, req.user.employeeId]
+      );
     return res.json({
       items: (rows || []).map((r) => ({
         id: r.id,
