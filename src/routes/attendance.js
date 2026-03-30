@@ -1,6 +1,7 @@
 const { pool } = require('../db/pool');
 const { authRequired } = require('../middleware/auth');
 const { parseOccuredAt, toWorkdayDate } = require('../utils/timezone');
+const { enforceEmployeeManualWorkdayClose } = require('../utils/workdayClosePolicy');
 const { notifySuperManagerAttendanceRecord } = require('../services/superManagerAttendanceNotify');
 const { sendEmail, sendFcm } = require('../services/notify');
 
@@ -154,6 +155,16 @@ module.exports = function registerAttendanceRoutes(app) {
 
     const occurredAtDt = parseOccuredAt(occurredAt);
     const workday_date = toWorkdayDate(occurredAtDt);
+
+    if (eventType === 'WORKDAY_CLOSED' && source !== 'AUTO') {
+      const deny = await enforceEmployeeManualWorkdayClose({
+        role: req.user.role,
+        employeeId,
+        companyId,
+        occurredAtDt
+      });
+      if (deny) return res.status(deny.status).json({ error: deny.error });
+    }
 
     await pool.query(
       `INSERT INTO attendance_events

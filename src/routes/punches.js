@@ -1,6 +1,7 @@
 const { pool } = require('../db/pool');
 const { authRequired } = require('../middleware/auth');
 const { parseOccuredAt, toWorkdayDate } = require('../utils/timezone');
+const { enforceEmployeeManualWorkdayClose } = require('../utils/workdayClosePolicy');
 
 function mapPunchToAttendanceEvent(punchType) {
   if (punchType === 'ENTRY') return 'CHECK_IN';
@@ -105,6 +106,17 @@ module.exports = function registerPunchRoutes(app) {
 
     const occurredAtDt = parseOccuredAt(occurredAt);
     const workdayDate = toWorkdayDate(occurredAtDt);
+
+    if (Boolean(endWorkday)) {
+      const deny = await enforceEmployeeManualWorkdayClose({
+        role: req.user.role,
+        employeeId,
+        companyId,
+        occurredAtDt
+      });
+      if (deny) return res.status(deny.status).json({ error: deny.error });
+    }
+
     const employeeType = await getEmployeeType(employeeId);
     const geofenceKeyForCircle = officeId === emp.office_id ? emp.geofence_key : null;
     const geofence = await getGeofenceForPunch(officeId, geofenceKeyForCircle);
