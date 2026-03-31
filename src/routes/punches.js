@@ -72,6 +72,28 @@ async function inferPunchType({ employeeId, workdayDate, employeeType, insideGeo
   return insideGeofence ? 'ENTRY' : 'MOVEMENT';
 }
 
+async function isWorkdayAlreadyClosed(employeeId, workdayDate) {
+  const [punchRows] = await pool.query(
+    `SELECT 1
+     FROM punches
+     WHERE user_id = ? AND workday_date = ? AND punch_type = 'EXIT'
+     LIMIT 1`,
+    [employeeId, workdayDate]
+  );
+  if (punchRows?.length) return true;
+
+  const [attendanceRows] = await pool.query(
+    `SELECT 1
+     FROM attendance_events
+     WHERE employee_id = ?
+       AND workday_date = ?
+       AND event_type IN ('WORKDAY_CLOSED', 'GEOFENCE_EXIT')
+     LIMIT 1`,
+    [employeeId, workdayDate]
+  );
+  return Boolean(attendanceRows?.length);
+}
+
 module.exports = function registerPunchRoutes(app) {
   app.post('/punches', authRequired, async (req, res) => {
     const employeeId = req.user.employeeId;
@@ -116,6 +138,11 @@ module.exports = function registerPunchRoutes(app) {
         occurredAtDt
       });
       if (deny) return res.status(deny.status).json({ error: deny.error });
+
+      const alreadyClosed = await isWorkdayAlreadyClosed(employeeId, workdayDate);
+      if (alreadyClosed) {
+        return res.status(400).json({ error: 'Workday is already closed' });
+      }
     }
 
     const employeeType = await getEmployeeType(employeeId);

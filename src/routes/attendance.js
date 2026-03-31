@@ -103,6 +103,19 @@ async function handleWorkdayClosedNotifications({ employeeId, officeId, manualCl
   ]);
 }
 
+async function isWorkdayAlreadyClosed(employeeId, workdayDate) {
+  const [rows] = await pool.query(
+    `SELECT 1
+     FROM attendance_events
+     WHERE employee_id = ?
+       AND workday_date = ?
+       AND event_type IN ('WORKDAY_CLOSED', 'GEOFENCE_EXIT')
+     LIMIT 1`,
+    [employeeId, workdayDate]
+  );
+  return Boolean(rows?.length);
+}
+
 module.exports = function registerAttendanceRoutes(app) {
   app.post('/attendance', authRequired, async (req, res) => {
     const {
@@ -164,6 +177,11 @@ module.exports = function registerAttendanceRoutes(app) {
         occurredAtDt
       });
       if (deny) return res.status(deny.status).json({ error: deny.error });
+
+      const alreadyClosed = await isWorkdayAlreadyClosed(employeeId, workday_date);
+      if (alreadyClosed) {
+        return res.status(400).json({ error: 'Workday is already closed' });
+      }
     }
 
     await pool.query(
