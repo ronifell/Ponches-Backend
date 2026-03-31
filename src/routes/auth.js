@@ -5,6 +5,21 @@ const { pool } = require('../db/pool');
 const env = require('../config/env');
 const { sendEmail } = require('../services/notify');
 
+async function ensurePasswordResetTable() {
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS password_reset_codes (
+      id CHAR(36) PRIMARY KEY,
+      employee_id CHAR(36) NOT NULL,
+      code_hash VARCHAR(255) NOT NULL,
+      expires_at DATETIME(3) NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT fk_password_reset_employee FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE,
+      INDEX idx_password_reset_employee (employee_id),
+      INDEX idx_password_reset_expires (expires_at)
+    ) ENGINE=InnoDB`
+  );
+}
+
 async function login(req, res) {
   const { employeeCode, password } = req.body || {};
   if (!employeeCode || !password) {
@@ -99,6 +114,7 @@ async function requestPasswordReset(req, res) {
   const codeHash = await bcrypt.hash(code, 10);
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
+  await ensurePasswordResetTable();
   await pool.query('DELETE FROM password_reset_codes WHERE employee_id = ?', [employee.id]);
   await pool.query(
     `INSERT INTO password_reset_codes (id, employee_id, code_hash, expires_at)
@@ -129,6 +145,7 @@ async function verifyPasswordResetCode(req, res) {
     return res.status(400).json({ error: 'Invalid verification code' });
   }
 
+  await ensurePasswordResetTable();
   const [rows] = await pool.query(
     `SELECT pr.id, pr.code_hash, pr.expires_at, e.email
      FROM password_reset_codes pr
@@ -167,6 +184,7 @@ async function resetPassword(req, res) {
     return res.status(400).json({ error: 'Password must be at least 6 characters' });
   }
 
+  await ensurePasswordResetTable();
   const [rows] = await pool.query(
     `SELECT pr.id, pr.employee_id, pr.code_hash, pr.expires_at
      FROM password_reset_codes pr

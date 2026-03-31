@@ -10,6 +10,7 @@
     "db:migrate": "node src/db/migrate.js",
     "db:geofence-migrate": "node src/db/run-geofence-migration.js",
     "db:invites-migrate": "node src/db/run-invites-migration.js",
+    "db:password-reset-migrate": "node src/db/run-password-reset-migration.js",
     "db:seed": "node src/db/seed.js"
   },
   "dependencies": {
