@@ -96,7 +96,7 @@ async function notifySuperManagerAttendanceRecord({
   geofenceKey = null
 }) {
   const recipients = await resolveAttendanceNotifyRecipients(companyId, officeId);
-  if (!recipients.length) return;
+  const shouldSendCompanyCopy = eventType === 'WORKDAY_CLOSED';
 
   const [actorRows] = await pool.query(
     `SELECT employee_code, full_name FROM employees WHERE id = ? LIMIT 1`,
@@ -122,7 +122,6 @@ async function notifySuperManagerAttendanceRecord({
   // Always email the company notification address stored on `companies.notification_email`
   // when a workday is closed (manual or auto).
   // Fallback: if the DB column is empty, try extracting an address from `MAIL_FROM` for backwards compatibility.
-  const shouldSendCompanyCopy = eventType === 'WORKDAY_CLOSED';
   let companyEmail = null;
   if (shouldSendCompanyCopy) {
     const [companyRows] = await pool.query(
@@ -135,6 +134,9 @@ async function notifySuperManagerAttendanceRecord({
     }
   }
 
+  // If there are no supervisor/admin recipients and also no company email, nothing to send.
+  if (!recipients.length && (!shouldSendCompanyCopy || !companyEmail)) return;
+
   const emailTargets = recipients.filter((r) => r.id !== employeeId);
   if (shouldSendCompanyCopy && companyEmail) {
     const companyEmailNorm = companyEmail.trim().toLowerCase();
@@ -143,7 +145,7 @@ async function notifySuperManagerAttendanceRecord({
       emailTargets.push({ id: '__company__', email: companyEmailNorm, full_name: 'Company' });
     }
   } else if (shouldSendCompanyCopy && !companyEmail) {
-    console.warn('Company email not configured; skipping company copy for auto-closure.');
+    console.warn('Company email not configured; skipping company copy for workday closure.');
   }
 
   await Promise.all(
