@@ -17,7 +17,18 @@ async function main() {
     await conn.query('SET FOREIGN_KEY_CHECKS=0;');
     for (const stmt of statements) {
       // eslint-disable-next-line no-await-in-loop
-      await conn.query(stmt);
+      try {
+        await conn.query(stmt);
+      } catch (err) {
+        // Make schema.sql re-runnable by tolerating duplicate-column errors.
+        // This is especially helpful for ADD COLUMN statements.
+        const msg = err?.message || '';
+        if (err?.code === 'ER_DUP_FIELDNAME' || /Duplicate column name/i.test(msg)) {
+          console.warn('Migration skipped duplicate column:', err?.code || msg);
+          continue;
+        }
+        throw err;
+      }
     }
     await conn.query('SET FOREIGN_KEY_CHECKS=1;');
     console.log('Migration completed successfully.');

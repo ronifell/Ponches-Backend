@@ -2,6 +2,20 @@ const { pool } = require('../db/pool');
 const env = require('../config/env');
 const { sendEmail } = require('./notify');
 
+function extractEmailAddress(value) {
+  if (value == null) return null;
+  const s = String(value).trim();
+  if (!s) return null;
+
+  // Common patterns:
+  // - "Company Name" <company@example.com>
+  // - company@example.com
+  const angleMatch = s.match(/<([^>]+)>/);
+  if (angleMatch?.[1]) return angleMatch[1].trim();
+  if (s.includes('@')) return s;
+  return null;
+}
+
 function trimEmail(value) {
   if (value == null) return null;
   const t = String(value).trim();
@@ -105,10 +119,35 @@ async function notifySuperManagerAttendanceRecord({
   if (geofenceKey) lines.push(`Geofence: ${geofenceKey}`);
   const text = lines.join('\n');
 
+  // For workday auto-closure alerts (employee didn't manually close by 8pm),
+  // also email the company notification address stored on `companies.notification_email`.
+  // Fallback: if the DB column is empty, try extracting an address from `MAIL_FROM` for backwards compatibility.
+  const shouldSendCompanyCopy = eventType === 'WORKDAY_CLOSED' && !manualClose && source === 'AUTO';
+  let companyEmail = null;
+  if (shouldSendCompanyCopy) {
+    const [companyRows] = await pool.query(
+      'SELECT notification_email FROM companies WHERE id = ? LIMIT 1',
+      [companyId]
+    );
+    companyEmail = trimEmail(companyRows?.[0]?.notification_email);
+    if (!companyEmail) {
+      companyEmail = extractEmailAddress(env.mail.mailFrom) || extractEmailAddress(env.mail.smtpUser);
+    }
+  }
+
+  const emailTargets = recipients.filter((r) => r.id !== employeeId);
+  if (shouldSendCompanyCopy && companyEmail) {
+    const companyEmailNorm = companyEmail.trim().toLowerCase();
+    const existsAlready = emailTargets.some((r) => String(r.email || '').trim().toLowerCase() === companyEmailNorm);
+    if (!existsAlready) {
+      emailTargets.push({ id: '__company__', email: companyEmailNorm, full_name: 'Company' });
+    }
+  } else if (shouldSendCompanyCopy && !companyEmail) {
+    console.warn('Company email not configured; skipping company copy for auto-closure.');
+  }
+
   await Promise.all(
-    recipients
-      .filter((r) => r.id !== employeeId)
-      .map((r) => sendEmail({ to: r.email, subject, text }))
+    emailTargets.map((r) => sendEmail({ to: r.email, subject, text }))
   );
 }
 

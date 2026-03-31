@@ -3,8 +3,12 @@
 CREATE TABLE IF NOT EXISTS companies (
   id CHAR(36) PRIMARY KEY,
   name VARCHAR(255) NOT NULL,
+  notification_email VARCHAR(255) NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
+
+-- Existing DBs need this added without failing.
+ALTER TABLE companies ADD COLUMN notification_email VARCHAR(255) NULL;
 
 CREATE TABLE IF NOT EXISTS offices (
   id CHAR(36) PRIMARY KEY,

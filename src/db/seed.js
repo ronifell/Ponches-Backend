@@ -20,8 +20,8 @@ async function seedOnce() {
     const geofenceId = uuidv4();
 
     await conn.query(
-      'INSERT INTO companies (id, name) VALUES (?, ?)',
-      [companyId, 'Demo Company']
+      'INSERT INTO companies (id, name, notification_email) VALUES (?, ?, ?)',
+      [companyId, 'Demo Company', process.env.SEED_COMPANY_NOTIFICATION_EMAIL || 'company@example.com']
     );
 
     await conn.query(
