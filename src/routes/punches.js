@@ -2,6 +2,7 @@ const { pool } = require('../db/pool');
 const { authRequired } = require('../middleware/auth');
 const { parseOccuredAt, toWorkdayDate } = require('../utils/timezone');
 const { enforceEmployeeManualWorkdayClose } = require('../utils/workdayClosePolicy');
+const { notifySuperManagerAttendanceRecord } = require('../services/superManagerAttendanceNotify');
 
 function mapPunchToAttendanceEvent(punchType) {
   if (punchType === 'ENTRY') return 'CHECK_IN';
@@ -142,17 +143,33 @@ module.exports = function registerPunchRoutes(app) {
     await pool.query(
       `INSERT INTO attendance_events
       (id, company_id, office_id, employee_id, event_type, manual_close, source, occurred_at, workday_date, geofence_key)
-      VALUES (UUID(), ?, ?, ?, ?, ?, 'GEOFENCE', ?, ?, NULL)`,
+      VALUES (UUID(), ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
       [
         companyId,
         officeId,
         employeeId,
         mapPunchToAttendanceEvent(punchType),
         punchType === 'EXIT' ? 1 : 0,
+        Boolean(endWorkday) ? 'MANUAL' : 'GEOFENCE',
         occurredAtDt.toSQL({ includeOffset: false }),
         workdayDate
       ]
     );
+
+    const eventType = mapPunchToAttendanceEvent(punchType);
+    const manualClose = punchType === 'EXIT';
+    const source = Boolean(endWorkday) ? 'MANUAL' : 'GEOFENCE';
+    const occurredAtFormatted = occurredAtDt.toFormat('yyyy-LL-dd HH:mm');
+    notifySuperManagerAttendanceRecord({
+      companyId,
+      employeeId,
+      officeId,
+      eventType,
+      source,
+      occurredAtFormatted,
+      manualClose,
+      geofenceKey: null
+    }).catch((e) => console.warn('Super manager attendance email failed:', e.message || e));
 
     return res.status(201).json({
       ok: true,
