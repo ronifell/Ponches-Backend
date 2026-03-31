@@ -37,7 +37,26 @@ async function seedOnce() {
     const passwordHash = await bcrypt.hash(DEFAULT_PASSWORD, 10);
 
     const supervisorId = uuidv4();
+    const adminId = uuidv4();
     const employeeId = uuidv4();
+
+    await conn.query(
+      'INSERT INTO employees (id, employee_code, company_id, office_id, geofence_key, role, full_name, password_hash, email, fcm_token, employee_type, is_supervisor) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [
+        adminId,
+        'ADM001',
+        companyId,
+        officeId,
+        'office-demo',
+        'ADMIN',
+        'Demo Admin',
+        await bcrypt.hash('admin123456', 10),
+        'admin@example.com',
+        null,
+        'CENTRALIZED',
+        0
+      ]
+    );
 
     await conn.query(
       'INSERT INTO employees (id, employee_code, company_id, office_id, geofence_key, role, full_name, password_hash, email, fcm_token, employee_type, is_supervisor) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',

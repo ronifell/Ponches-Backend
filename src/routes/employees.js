@@ -21,7 +21,7 @@ async function createEmployee(req, res) {
     return res.status(400).json({ error: 'employeeCode, password, fullName, companyId, geofenceKey are required' });
   }
 
-  if (!['EMPLOYEE', 'SUPERVISOR', 'ADMIN'].includes(role)) {
+  if (!['EMPLOYEE', 'SUPERVISOR', 'INSPECTOR', 'ADMIN'].includes(role)) {
     return res.status(400).json({ error: 'Invalid role' });
   }
   if (req.user.role === 'SUPERVISOR' && role !== 'EMPLOYEE') {
@@ -202,7 +202,7 @@ async function updateEmployee(req, res) {
     params.push(officeId);
   }
   if (role) {
-    if (!['EMPLOYEE', 'SUPERVISOR', 'ADMIN'].includes(role)) return res.status(400).json({ error: 'Invalid role' });
+    if (!['EMPLOYEE', 'SUPERVISOR', 'INSPECTOR', 'ADMIN'].includes(role)) return res.status(400).json({ error: 'Invalid role' });
     if (req.user.role === 'SUPERVISOR' && role !== 'EMPLOYEE') {
       return res.status(403).json({ error: 'Forbidden' });
     }

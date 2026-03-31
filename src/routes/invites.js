@@ -32,7 +32,7 @@ async function createInvite(req, res) {
     });
   }
 
-  if (!['EMPLOYEE', 'SUPERVISOR', 'ADMIN'].includes(role)) {
+  if (!['EMPLOYEE', 'SUPERVISOR', 'INSPECTOR', 'ADMIN'].includes(role)) {
     return res.status(400).json({ error: 'Invalid role' });
   }
   if (req.user.role === 'SUPERVISOR' && role !== 'EMPLOYEE') {
