@@ -119,10 +119,10 @@ async function notifySuperManagerAttendanceRecord({
   if (geofenceKey) lines.push(`Geofence: ${geofenceKey}`);
   const text = lines.join('\n');
 
-  // For workday auto-closure alerts (employee didn't manually close by 8pm),
-  // also email the company notification address stored on `companies.notification_email`.
+  // Always email the company notification address stored on `companies.notification_email`
+  // when a workday is closed (manual or auto).
   // Fallback: if the DB column is empty, try extracting an address from `MAIL_FROM` for backwards compatibility.
-  const shouldSendCompanyCopy = eventType === 'WORKDAY_CLOSED' && !manualClose && source === 'AUTO';
+  const shouldSendCompanyCopy = eventType === 'WORKDAY_CLOSED';
   let companyEmail = null;
   if (shouldSendCompanyCopy) {
     const [companyRows] = await pool.query(
