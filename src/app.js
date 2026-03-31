@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const env = require('./config/env');
 
-const { login } = require('./routes/auth');
+const { login, requestPasswordReset, verifyPasswordResetCode, resetPassword } = require('./routes/auth');
 const registerEmployeeRoutes = require('./routes/employees');
 const registerAttendanceRoutes = require('./routes/attendance');
 const registerPhotoRoutes = require('./routes/photos');
@@ -30,6 +30,9 @@ function createApp() {
   app.use('/uploads', express.static(env.uploads.uploadDir));
 
   app.post('/auth/login', login);
+  app.post('/auth/forgot-password/request', requestPasswordReset);
+  app.post('/auth/forgot-password/verify', verifyPasswordResetCode);
+  app.post('/auth/forgot-password/reset', resetPassword);
 
   registerEmployeeRoutes(app);
   registerAttendanceRoutes(app);
