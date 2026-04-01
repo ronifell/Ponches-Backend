@@ -12,6 +12,18 @@ const {
   normalizeWorkType
 } = require('../config/qualityPhotoCatalog');
 
+/** Multer text fields sometimes arrive quoted or JSON-escaped (same as /photos). */
+function normalizeMultipartScalar(v) {
+  if (v === null || v === undefined) return v;
+  if (typeof v !== 'string') return v;
+  let s = v.trim();
+  s = s.replace(/\\"/g, '"');
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+    s = s.slice(1, -1);
+  }
+  return s;
+}
+
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
@@ -162,7 +174,7 @@ module.exports = function registerQualityRoutes(app) {
       `INSERT INTO qualities
       (id, company_id, user_id, order_id, work_type, status, stb_count)
       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [id, req.user.companyId, req.user.employeeId, String(orderId), String(workType), status, stbCount]
+      [id, req.user.companyId, req.user.employeeId, String(orderId), wt, status, stbCount]
     );
     return res.status(201).json({ id, ok: true, stbCount, requiredPhotoTypes: slots });
   });
@@ -171,9 +183,9 @@ module.exports = function registerQualityRoutes(app) {
     await ensureQualitiesStbCountColumn();
     const { qualityId } = req.params;
     const body = req.body || {};
-    const photoTypeRaw = body.photoType ?? body['photo-type'];
+    const photoTypeRaw = normalizeMultipartScalar(body.photoType ?? body['photo-type']);
     const feRaw = body.fe;
-    const feCommentRaw = body.feComment ?? body.fe_comment;
+    const feCommentRaw = normalizeMultipartScalar(body.feComment ?? body.fe_comment);
     if (!req.file) return res.status(400).json({ error: 'Missing photo file' });
 
     const [qualityRows] = await pool.query(

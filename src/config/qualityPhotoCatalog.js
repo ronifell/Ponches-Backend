@@ -9,16 +9,16 @@ const SOURCE_CAMERA = 'CAMERA';
 const SOURCE_GALLERY = 'GALLERY';
 
 const WORK_META = {
-  DTH_REPAIR: { label: 'DTH repair', usesStb: true },
-  COPPER_FIBER_REPAIR: { label: 'Copper/fiber internet repair', usesStb: false },
-  DTH_INSTALL: { label: 'DTH installation / relocation / additional element', usesStb: true },
-  VOICE_INTERNET_INSTALL: { label: 'Voice/internet installation / relocation', usesStb: false },
-  MIXED_VID_DTH_INSTALL: { label: 'Mixed voice–internet–DTH installation', usesStb: true },
+  DTH_REPAIR: { label: 'Reparación DTH', usesStb: true },
+  COPPER_FIBER_REPAIR: { label: 'Reparación internet cobre/fibra', usesStb: false },
+  DTH_INSTALL: { label: 'Instalación DTH / reubicación / elemento adicional', usesStb: true },
+  VOICE_INTERNET_INSTALL: { label: 'Instalación voz/internet / reubicación', usesStb: false },
+  MIXED_VID_DTH_INSTALL: { label: 'Instalación mixta voz–internet–DTH', usesStb: true },
   MIXED_IPTV_CLARO_INSTALL: {
-    label: 'Mixed voice–internet–IPTV Claro TV Plus / additional element',
+    label: 'Instalación mixta voz–internet–IPTV Claro TV Plus / elemento adicional',
     usesStb: true
   },
-  A: { label: 'Legacy type A', usesStb: false }
+  A: { label: 'Tipo A (legado)', usesStb: false }
 };
 
 function slot(id, label, source) {
@@ -28,10 +28,10 @@ function slot(id, label, source) {
 function dthCoreSlots() {
   return [
     slot('DTH_LNB', 'LNB', SOURCE_CAMERA),
-    slot('DTH_DISH_REAR', 'Position behind the dish', SOURCE_CAMERA),
-    slot('DTH_DISH_BASE', 'Dish base', SOURCE_CAMERA),
-    slot('DTH_COAX_EXT', 'External coaxial cable', SOURCE_CAMERA),
-    slot('DTH_COAX_INT', 'Internal coaxial cable', SOURCE_CAMERA),
+    slot('DTH_DISH_REAR', 'Posición detrás de la parabólica', SOURCE_CAMERA),
+    slot('DTH_DISH_BASE', 'Base de la parabólica', SOURCE_CAMERA),
+    slot('DTH_COAX_EXT', 'Cable coaxial exterior', SOURCE_CAMERA),
+    slot('DTH_COAX_INT', 'Cable coaxial interior', SOURCE_CAMERA),
     slot('DTH_TP1', 'TP 1', SOURCE_CAMERA),
     slot('DTH_TP2', 'TP 2', SOURCE_CAMERA)
   ];
@@ -41,8 +41,8 @@ function dthStbSlots(stbCount) {
   const n = Math.min(MAX_STB_COUNT, Math.max(1, stbCount | 0));
   const out = [];
   for (let i = 1; i <= n; i += 1) {
-    out.push(slot(`DTH_STB_${i}`, `STB ${i}`, SOURCE_CAMERA));
-    out.push(slot(`DTH_BNC_${i}`, `BNC connector ${i}`, SOURCE_CAMERA));
+    out.push(slot(`DTH_STB_${i}`, `Decodificador (STB) ${i}`, SOURCE_CAMERA));
+    out.push(slot(`DTH_BNC_${i}`, `Conector BNC ${i}`, SOURCE_CAMERA));
   }
   return out;
 }
@@ -50,26 +50,26 @@ function dthStbSlots(stbCount) {
 function copperFiberSlots() {
   return [
     slot('COP_TERM', 'Terminal', SOURCE_CAMERA),
-    slot('COP_DROP_IN', 'Drop input', SOURCE_CAMERA),
-    slot('COP_DROP_EXT', 'External drop cable', SOURCE_CAMERA),
-    slot('COP_TESTER_INT', 'Tester and/or internal input', SOURCE_CAMERA),
-    slot('COP_CABLE_INT', 'Internal cable', SOURCE_CAMERA),
-    slot('COP_JACK', 'Jack/rosette', SOURCE_CAMERA),
-    slot('COP_MODEM', 'Modem/ONT', SOURCE_CAMERA),
-    slot('COP_SACS_PARAMS', 'Parameters (SACS)', SOURCE_CAMERA)
+    slot('COP_DROP_IN', 'Entrada del drop', SOURCE_CAMERA),
+    slot('COP_DROP_EXT', 'Cable drop exterior', SOURCE_CAMERA),
+    slot('COP_TESTER_INT', 'Tester y/o entrada interior', SOURCE_CAMERA),
+    slot('COP_CABLE_INT', 'Cable interior', SOURCE_CAMERA),
+    slot('COP_JACK', 'Jack/roseta', SOURCE_CAMERA),
+    slot('COP_MODEM', 'Módem/ONT', SOURCE_CAMERA),
+    slot('COP_SACS_PARAMS', 'Parámetros (SACS)', SOURCE_GALLERY)
   ];
 }
 
 function voiceInternetSlots() {
   return [
     slot('VI_TERM', 'Terminal', SOURCE_CAMERA),
-    slot('VI_DROP_IN_1', 'Drop input (1)', SOURCE_CAMERA),
-    slot('VI_DROP_IN_2', 'Drop input (2)', SOURCE_CAMERA),
-    slot('VI_TESTER_INDOOR', 'Tester and/or indoor input', SOURCE_CAMERA),
-    slot('VI_INDOOR_IN', 'Indoor input', SOURCE_CAMERA),
-    slot('VI_JACK', 'Jack/rosette', SOURCE_CAMERA),
-    slot('VI_MODEM', 'Modem/ONT', SOURCE_CAMERA),
-    slot('VI_SACS_PARAMS', 'Parameters (SACS)', SOURCE_CAMERA)
+    slot('VI_DROP_IN_1', 'Entrada del drop (1)', SOURCE_CAMERA),
+    slot('VI_DROP_IN_2', 'Entrada del drop (2)', SOURCE_CAMERA),
+    slot('VI_TESTER_INDOOR', 'Tester y/o entrada en interior', SOURCE_CAMERA),
+    slot('VI_INDOOR_IN', 'Entrada en interior', SOURCE_CAMERA),
+    slot('VI_JACK', 'Jack/roseta', SOURCE_CAMERA),
+    slot('VI_MODEM', 'Módem/ONT', SOURCE_CAMERA),
+    slot('VI_SACS_PARAMS', 'Parámetros (SACS)', SOURCE_GALLERY)
   ];
 }
 
@@ -77,9 +77,9 @@ function iptvExtraSlots(stbCount) {
   const n = Math.min(MAX_STB_COUNT, Math.max(1, stbCount | 0));
   const out = [];
   for (let i = 1; i <= n; i += 1) {
-    out.push(slot(`IPTV_UTP_${i}`, `UTP cable ${i}`, SOURCE_CAMERA));
-    out.push(slot(`IPTV_STB_${i}`, `STB ${i}`, SOURCE_CAMERA));
-    out.push(slot(`IPTV_RJ45_${i}`, `RJ45 connector + rubber cap ${i}`, SOURCE_CAMERA));
+    out.push(slot(`IPTV_UTP_${i}`, `Cable UTP ${i}`, SOURCE_CAMERA));
+    out.push(slot(`IPTV_STB_${i}`, `Decodificador (STB) ${i}`, SOURCE_CAMERA));
+    out.push(slot(`IPTV_RJ45_${i}`, `Conector RJ45 + capuchón ${i}`, SOURCE_CAMERA));
   }
   return out;
 }
@@ -102,9 +102,9 @@ function slotsForWorkType(workType, stbCount) {
       return [...copperFiberSlots(), ...iptvExtraSlots(sc)];
     case 'A':
       return [
-        slot('BEFORE', 'Before', SOURCE_CAMERA),
-        slot('DURING', 'During', SOURCE_CAMERA),
-        slot('AFTER', 'After', SOURCE_CAMERA)
+        slot('BEFORE', 'Antes', SOURCE_CAMERA),
+        slot('DURING', 'Durante', SOURCE_CAMERA),
+        slot('AFTER', 'Después', SOURCE_CAMERA)
       ];
     default:
       return [];
