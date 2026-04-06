@@ -184,6 +184,25 @@ async function listQualityForAdmin(req, res) {
     params.push(String(userIdFilter).trim());
   }
 
+  const uiStatus = String(firstQueryParam(req.query.uiStatus) || '')
+    .trim()
+    .toUpperCase();
+  const feExistsSql =
+    'EXISTS (SELECT 1 FROM quality_photos qp_fe WHERE qp_fe.quality_id = q.id AND qp_fe.fe = 1)';
+  if (uiStatus === 'OK') {
+    conditions.push(`(q.status = 'APPROVED' OR q.inspector_decision = 'OK')`);
+  } else if (uiStatus === 'ERROR') {
+    conditions.push(`(q.status = 'REJECTED' OR q.inspector_decision = 'ERROR')`);
+  } else if (uiStatus === 'FE') {
+    conditions.push(
+      `( (q.inspector_decision = 'FE' OR ${feExistsSql}) AND NOT (q.status = 'APPROVED' OR q.inspector_decision = 'OK') AND NOT (q.status = 'REJECTED' OR q.inspector_decision = 'ERROR') )`
+    );
+  } else if (uiStatus === 'IN_PROGRESS') {
+    conditions.push(
+      `( NOT (q.status = 'APPROVED' OR q.inspector_decision = 'OK') AND NOT (q.status = 'REJECTED' OR q.inspector_decision = 'ERROR') AND NOT (q.inspector_decision = 'FE' OR ${feExistsSql}) )`
+    );
+  }
+
   const whereSql = conditions.join(' AND ');
   const limit = Math.min(Number(req.query.limit) || 300, 500);
 
