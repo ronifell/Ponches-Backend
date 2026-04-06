@@ -298,15 +298,21 @@ async function updateEmployee(req, res) {
     params.push(isSupervisor ? 1 : 0);
   }
   if (regionBody !== undefined && isAdminOrSupervisor) {
-    const vrScope = await viewerRegionParams(req.user.employeeId, req.user.companyId);
-    if (vrScope.params.length) {
-      updates.push('region = ?');
-      params.push(vrScope.params[0]);
-    } else {
-      const rv =
-        regionBody === null || regionBody === '' ? null : String(regionBody).trim().slice(0, 128);
+    const rv =
+      regionBody === null || regionBody === '' ? null : String(regionBody).trim().slice(0, 128);
+    // Admins may change their own region from the profile (affects which employees they see).
+    if (isSelf && req.user.role === 'ADMIN') {
       updates.push('region = ?');
       params.push(rv || null);
+    } else {
+      const vrScope = await viewerRegionParams(req.user.employeeId, req.user.companyId);
+      if (vrScope.params.length) {
+        updates.push('region = ?');
+        params.push(vrScope.params[0]);
+      } else {
+        updates.push('region = ?');
+        params.push(rv || null);
+      }
     }
   }
   if (password) {
