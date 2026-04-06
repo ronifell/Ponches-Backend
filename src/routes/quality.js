@@ -70,7 +70,16 @@ function normalizePhotoType(photoType) {
   return String(photoType || 'GENERAL').trim().toUpperCase();
 }
 
-async function notifyQualityUpload({ companyId, uploaderId, qualityId, orderId, workType, photoType, fe }) {
+async function notifyQualityUpload({
+  companyId,
+  uploaderId,
+  qualityId,
+  orderId,
+  workType,
+  photoType,
+  fe,
+  feComment
+}) {
   const [uploaderRows] = await pool.query(
     `SELECT employee_code, full_name, supervisor_id
      FROM employees
@@ -130,13 +139,18 @@ async function notifyQualityUpload({ companyId, uploaderId, qualityId, orderId, 
 
   const uploaderLabel = uploader?.employee_code || uploader?.full_name || uploaderId;
   const subject = `Quality upload completed · Order ${orderId}`;
+  const commentLine =
+    fe && String(feComment || '').trim()
+      ? `Technician comment (out of standard): ${String(feComment).trim()}\n`
+      : '';
   const body =
     `A quality photo upload was completed.\n\n` +
     `Uploader: ${uploaderLabel}\n` +
     `Order: ${orderId}\n` +
     `Work Type: ${workType}\n` +
     `Photo Type: ${photoType}\n` +
-    `FE: ${fe ? 'Yes' : 'No'}\n` +
+    `FE (out of standard): ${fe ? 'Yes' : 'No'}\n` +
+    commentLine +
     `Quality ID: ${qualityId}`;
 
   await Promise.all([
@@ -204,7 +218,9 @@ module.exports = function registerQualityRoutes(app) {
       String(feRaw || '').toLowerCase() === 'true';
     const normalizedComment = String(feCommentRaw || '').trim();
     if (feOn && !normalizedComment) {
-      return res.status(400).json({ error: 'feComment is required when FE is true' });
+      return res.status(400).json({
+        error: 'Comment is required when the photo is marked out of standard (FE)'
+      });
     }
 
     const normalizedPhotoType = normalizePhotoType(photoTypeRaw);
@@ -234,7 +250,8 @@ module.exports = function registerQualityRoutes(app) {
       orderId: quality.order_id,
       workType: quality.work_type,
       photoType: normalizedPhotoType,
-      fe: feOn
+      fe: feOn,
+      feComment: normalizedComment || null
     }).catch((e) => console.warn('Quality upload notification failed:', e.message || e));
 
     return res.status(201).json({ id: photoId, photoUrl, ok: true });
