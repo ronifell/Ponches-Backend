@@ -167,6 +167,8 @@ async function listQualityForAdmin(req, res) {
   const toDate = firstQueryParam(req.query.toDate);
   const userIdFilter =
     firstQueryParam(req.query.userId) || firstQueryParam(req.query.employeeId);
+  const employeeCodeFilter = String(firstQueryParam(req.query.employeeCode) || '').trim();
+  const orderIdFilter = String(firstQueryParam(req.query.orderId) || '').trim();
 
   const conditions = ['q.company_id = ?'];
   const params = [companyId];
@@ -182,6 +184,14 @@ async function listQualityForAdmin(req, res) {
   if (isUuidLike(userIdFilter)) {
     conditions.push('q.user_id = ?');
     params.push(String(userIdFilter).trim());
+  }
+  if (employeeCodeFilter) {
+    conditions.push('e.employee_code = ?');
+    params.push(employeeCodeFilter);
+  }
+  if (orderIdFilter) {
+    conditions.push('q.order_id = ?');
+    params.push(orderIdFilter);
   }
 
   const uiStatus = String(firstQueryParam(req.query.uiStatus) || '')
@@ -211,8 +221,7 @@ async function listQualityForAdmin(req, res) {
             q.created_at, q.updated_at,
             e.full_name AS technician_name, e.employee_code AS technician_code,
             (SELECT COUNT(*) FROM quality_photos qp WHERE qp.quality_id = q.id) AS photo_count,
-            (SELECT MAX(qp.fe) FROM quality_photos qp WHERE qp.quality_id = q.id) AS any_fe,
-            (SELECT qp.photo_url FROM quality_photos qp WHERE qp.quality_id = q.id ORDER BY qp.created_at ASC LIMIT 1) AS first_photo_url
+            (SELECT MAX(qp.fe) FROM quality_photos qp WHERE qp.quality_id = q.id) AS any_fe
      FROM qualities q
      JOIN employees e ON e.id = q.user_id
      WHERE ${whereSql}
@@ -234,8 +243,7 @@ async function listQualityForAdmin(req, res) {
     technicianName: r.technician_name,
     technicianCode: r.technician_code,
     photoCount: Number(r.photo_count || 0),
-    anyFe: Boolean(r.any_fe),
-    firstPhotoUrl: r.first_photo_url || null
+    anyFe: Boolean(r.any_fe)
   }));
 
   return res.json({ items });
