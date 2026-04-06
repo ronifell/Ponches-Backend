@@ -1,9 +1,12 @@
 const bcrypt = require('bcrypt');
 const { pool } = require('../db/pool');
+const { ensureEmployeeRegionColumns } = require('../db/ensureEmployeeRegion');
+const { viewerRegionParams } = require('../lib/regionScope');
 const { authRequired, requireRole } = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
 
 async function createEmployee(req, res) {
+  await ensureEmployeeRegionColumns();
   const {
     employeeCode,
     password,
@@ -14,7 +17,9 @@ async function createEmployee(req, res) {
     email = null,
     employeeType = 'CENTRALIZED',
     supervisorId = null,
-    isSupervisor = false
+    isSupervisor = false,
+    region: regionBody = undefined,
+    cardNumber: cardNumberBody = undefined
   } = req.body || {};
 
   if (!employeeCode || !password || !fullName || !companyId || !geofenceKey) {
@@ -70,11 +75,28 @@ async function createEmployee(req, res) {
     resolvedSupervisorId = null;
   }
 
+  let regionVal =
+    regionBody !== undefined && regionBody !== null ? String(regionBody).trim().slice(0, 128) : '';
+  if (req.user.role === 'ADMIN') {
+    const vr = await viewerRegionParams(req.user.employeeId, companyId);
+    if (vr.params.length) regionVal = vr.params[0];
+  } else if (!regionVal && req.user.role === 'SUPERVISOR') {
+    const [vr] = await pool.query(
+      `SELECT TRIM(COALESCE(region, '')) AS r FROM employees WHERE id = ? LIMIT 1`,
+      [req.user.employeeId]
+    );
+    regionVal = vr?.[0]?.r ? String(vr[0].r).trim().slice(0, 128) : '';
+  }
+  const cardVal =
+    cardNumberBody !== undefined && cardNumberBody !== null
+      ? String(cardNumberBody).trim().slice(0, 64)
+      : '';
+
   const employeeId = uuidv4();
   const passwordHash = await bcrypt.hash(password, 10);
   await pool.query(
-    `INSERT INTO employees (id, employee_code, company_id, office_id, geofence_key, role, full_name, password_hash, email, employee_type, supervisor_id, is_supervisor)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO employees (id, employee_code, company_id, office_id, geofence_key, role, full_name, password_hash, email, employee_type, supervisor_id, is_supervisor, region, card_number)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       employeeId,
       employeeCode,
@@ -87,7 +109,9 @@ async function createEmployee(req, res) {
       email,
       employeeType,
       resolvedSupervisorId,
-      isSupervisor ? 1 : 0
+      isSupervisor ? 1 : 0,
+      regionVal || null,
+      cardVal || null
     ]
   );
 
@@ -96,9 +120,12 @@ async function createEmployee(req, res) {
 }
 
 async function getEmployee(req, res) {
+  await ensureEmployeeRegionColumns();
   const { id } = req.params;
   const [rows] = await pool.query(
-    'SELECT id, employee_code, company_id, office_id, geofence_key, role, full_name, email, fcm_token, employee_type, supervisor_id, is_supervisor FROM employees WHERE id = ? LIMIT 1',
+    `SELECT id, employee_code, company_id, office_id, geofence_key, role, full_name, email, fcm_token, employee_type, supervisor_id, is_supervisor,
+            region, card_number
+     FROM employees WHERE id = ? LIMIT 1`,
     [id]
   );
   const employee = rows?.[0];
@@ -107,6 +134,13 @@ async function getEmployee(req, res) {
   const requesterCompanyId = req.user?.companyId;
   if (requesterCompanyId && employee.company_id !== requesterCompanyId) {
     return res.status(403).json({ error: 'Forbidden' });
+  }
+  if (['ADMIN', 'SUPERVISOR'].includes(req.user?.role) && requesterCompanyId) {
+    const vr = await viewerRegionParams(req.user.employeeId, requesterCompanyId);
+    if (vr.params.length) {
+      const tr = String(employee.region || '').trim();
+      if (tr !== vr.params[0]) return res.status(403).json({ error: 'Forbidden' });
+    }
   }
   if (req.user?.role === 'SUPERVISOR') {
     const isSelf = req.user.employeeId === employee.id;
@@ -131,16 +165,32 @@ async function getEmployee(req, res) {
     isSupervisor: Boolean(employee.is_supervisor),
     fullName: employee.full_name,
     email: employee.email,
-    fcmToken: employee.fcm_token
+    fcmToken: employee.fcm_token,
+    region: employee.region || null,
+    cardNumber: employee.card_number || null
   });
 }
 
 async function updateEmployee(req, res) {
+  await ensureEmployeeRegionColumns();
   const { id } = req.params;
-  const { fullName, password, fcmToken, email, officeId, geofenceKey, role, employeeType, supervisorId, isSupervisor } = req.body || {};
+  const {
+    fullName,
+    password,
+    fcmToken,
+    email,
+    officeId,
+    geofenceKey,
+    role,
+    employeeType,
+    supervisorId,
+    isSupervisor,
+    region: regionBody,
+    cardNumber: cardNumberBody
+  } = req.body || {};
 
   const [rows] = await pool.query(
-    'SELECT id, company_id, role, supervisor_id FROM employees WHERE id = ? LIMIT 1',
+    'SELECT id, company_id, role, supervisor_id, region FROM employees WHERE id = ? LIMIT 1',
     [id]
   );
   const existing = rows?.[0];
@@ -152,6 +202,11 @@ async function updateEmployee(req, res) {
   if (!isSelf) {
     if (!isAdminOrSupervisor) return res.status(403).json({ error: 'Forbidden' });
     if (existing.company_id !== req.user.companyId) return res.status(403).json({ error: 'Forbidden' });
+    const vrScope = await viewerRegionParams(req.user.employeeId, req.user.companyId);
+    if (vrScope.params.length) {
+      const tr = String(existing.region || '').trim();
+      if (tr !== vrScope.params[0]) return res.status(403).json({ error: 'Forbidden' });
+    }
     if (req.user.role === 'SUPERVISOR' && existing.supervisor_id !== req.user.employeeId) {
       return res.status(403).json({ error: 'Forbidden' });
     }
@@ -159,7 +214,13 @@ async function updateEmployee(req, res) {
 
   // Employees can update only their own profile fields; restrict sensitive changes.
   if (isSelf && ['EMPLOYEE', 'SUPERVISOR'].includes(req.user.role)) {
-    if (officeId !== undefined || geofenceKey !== undefined || role !== undefined) {
+    if (
+      officeId !== undefined ||
+      geofenceKey !== undefined ||
+      role !== undefined ||
+      regionBody !== undefined ||
+      cardNumberBody !== undefined
+    ) {
       return res.status(403).json({ error: 'Forbidden' });
     }
   }
@@ -246,6 +307,26 @@ async function updateEmployee(req, res) {
     updates.push('is_supervisor = ?');
     params.push(isSupervisor ? 1 : 0);
   }
+  if (regionBody !== undefined && isAdminOrSupervisor) {
+    const vrScope = await viewerRegionParams(req.user.employeeId, req.user.companyId);
+    if (vrScope.params.length) {
+      updates.push('region = ?');
+      params.push(vrScope.params[0]);
+    } else {
+      const rv =
+        regionBody === null || regionBody === '' ? null : String(regionBody).trim().slice(0, 128);
+      updates.push('region = ?');
+      params.push(rv || null);
+    }
+  }
+  if (cardNumberBody !== undefined && isAdminOrSupervisor) {
+    const cv =
+      cardNumberBody === null || cardNumberBody === ''
+        ? null
+        : String(cardNumberBody).trim().slice(0, 64);
+    updates.push('card_number = ?');
+    params.push(cv || null);
+  }
   if (password) {
     updates.push('password_hash = ?');
     params.push(await bcrypt.hash(password, 10));
@@ -261,30 +342,48 @@ async function updateEmployee(req, res) {
 module.exports = function registerEmployeeRoutes(app) {
   app.post('/employees', authRequired, requireRole('ADMIN', 'SUPERVISOR'), createEmployee);
   app.get('/employees', authRequired, requireRole('ADMIN', 'SUPERVISOR'), async (req, res) => {
+    await ensureEmployeeRegionColumns();
     const isAdmin = req.user.role === 'ADMIN';
-    const [rows] = isAdmin
-      ? await pool.query(
-        `SELECT id, employee_code, full_name, role
-         FROM employees
-         WHERE company_id = ?
-         ORDER BY full_name ASC`,
-        [req.user.companyId]
-      )
-      : await pool.query(
-        `SELECT id, employee_code, full_name, role
-         FROM employees
-         WHERE company_id = ?
-           AND role = 'EMPLOYEE'
-           AND supervisor_id = ?
-         ORDER BY full_name ASC`,
-        [req.user.companyId, req.user.employeeId]
-      );
+    const searchRaw = String(req.query.search || req.query.q || '').trim();
+    const search = searchRaw.slice(0, 128);
+    const regionScope = await viewerRegionParams(req.user.employeeId, req.user.companyId);
+
+    const conditions = ['e.company_id = ?'];
+    const params = [req.user.companyId];
+
+    if (!isAdmin) {
+      conditions.push(`e.role = 'EMPLOYEE'`);
+      conditions.push('e.supervisor_id = ?');
+      params.push(req.user.employeeId);
+    }
+
+    if (regionScope.params.length) {
+      conditions.push(`TRIM(COALESCE(e.region, '')) = ?`);
+      params.push(regionScope.params[0]);
+    }
+
+    if (search) {
+      conditions.push('(e.employee_code LIKE ? OR e.card_number LIKE ?)');
+      const like = `%${search.replace(/%/g, '\\%').replace(/_/g, '\\_')}%`;
+      params.push(like, like);
+    }
+
+    const whereSql = conditions.join(' AND ');
+    const [rows] = await pool.query(
+      `SELECT e.id, e.employee_code, e.full_name, e.role, e.region, e.card_number
+       FROM employees e
+       WHERE ${whereSql}
+       ORDER BY e.full_name ASC`,
+      params
+    );
     return res.json({
       items: (rows || []).map((r) => ({
         id: r.id,
         employeeCode: r.employee_code,
         fullName: r.full_name,
-        role: r.role
+        role: r.role,
+        region: r.region || null,
+        cardNumber: r.card_number || null
       }))
     });
   });

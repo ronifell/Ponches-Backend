@@ -1,5 +1,7 @@
 const { pool } = require('../db/pool');
+const { ensureEmployeeRegionColumns } = require('../db/ensureEmployeeRegion');
 const { ensureQualityPhotosInspectorDecisionColumn } = require('../db/ensureQualityPhotoInspector');
+const { viewerRegionParams } = require('../lib/regionScope');
 const { authRequired, requireRole } = require('../middleware/auth');
 const { DateTime } = require('luxon');
 
@@ -72,35 +74,57 @@ function todayWorkdayDate() {
 }
 
 async function getDashboardSummary(req, res) {
+  await ensureEmployeeRegionColumns();
   const companyId = req.user.companyId;
   const workdayDate = todayWorkdayDate();
+  const regionFrag = await viewerRegionParams(req.user.employeeId, companyId);
 
-  const [[empRow]] = await pool.query(
-    `SELECT COUNT(*) AS c FROM employees WHERE company_id = ?`,
-    [companyId]
-  );
+  const empSql = regionFrag.params.length
+    ? `SELECT COUNT(*) AS c FROM employees WHERE company_id = ? AND TRIM(COALESCE(region, '')) = ?`
+    : `SELECT COUNT(*) AS c FROM employees WHERE company_id = ?`;
+  const empParams = regionFrag.params.length ? [companyId, regionFrag.params[0]] : [companyId];
+  const [[empRow]] = await pool.query(empSql, empParams);
+
   const [[gfRow]] = await pool.query(
     `SELECT COUNT(*) AS c FROM geofences g JOIN offices o ON o.id = g.office_id WHERE o.company_id = ?`,
     [companyId]
   );
 
-  const [[checkInRow]] = await pool.query(
-    `SELECT COUNT(DISTINCT employee_id) AS c
-     FROM attendance_events
-     WHERE company_id = ? AND workday_date = ? AND event_type = 'CHECK_IN'`,
-    [companyId, workdayDate]
-  );
+  const checkInSql = regionFrag.params.length
+    ? `SELECT COUNT(DISTINCT a.employee_id) AS c
+       FROM attendance_events a
+       JOIN employees e ON e.id = a.employee_id
+       WHERE a.company_id = ? AND a.workday_date = ? AND a.event_type = 'CHECK_IN'
+         AND TRIM(COALESCE(e.region, '')) = ?`
+    : `SELECT COUNT(DISTINCT employee_id) AS c
+       FROM attendance_events
+       WHERE company_id = ? AND workday_date = ? AND event_type = 'CHECK_IN'`;
+  const checkInParams = regionFrag.params.length
+    ? [companyId, workdayDate, regionFrag.params[0]]
+    : [companyId, workdayDate];
+  const [[checkInRow]] = await pool.query(checkInSql, checkInParams);
 
-  const [[lateRow]] = await pool.query(
-    `SELECT COUNT(*) AS c
-     FROM attendance_events a
-     JOIN offices o ON o.id = a.office_id
-     WHERE a.company_id = ?
-       AND a.workday_date = ?
-       AND a.event_type = 'CHECK_IN'
-       AND ADDTIME(o.opening_time, SEC_TO_TIME(o.grace_minutes * 60)) < TIME(a.occurred_at)`,
-    [companyId, workdayDate]
-  );
+  const lateSql = regionFrag.params.length
+    ? `SELECT COUNT(*) AS c
+       FROM attendance_events a
+       JOIN offices o ON o.id = a.office_id
+       JOIN employees e ON e.id = a.employee_id
+       WHERE a.company_id = ?
+         AND a.workday_date = ?
+         AND a.event_type = 'CHECK_IN'
+         AND TRIM(COALESCE(e.region, '')) = ?
+         AND ADDTIME(o.opening_time, SEC_TO_TIME(o.grace_minutes * 60)) < TIME(a.occurred_at)`
+    : `SELECT COUNT(*) AS c
+       FROM attendance_events a
+       JOIN offices o ON o.id = a.office_id
+       WHERE a.company_id = ?
+         AND a.workday_date = ?
+         AND a.event_type = 'CHECK_IN'
+         AND ADDTIME(o.opening_time, SEC_TO_TIME(o.grace_minutes * 60)) < TIME(a.occurred_at)`;
+  const lateParams = regionFrag.params.length
+    ? [companyId, workdayDate, regionFrag.params[0]]
+    : [companyId, workdayDate];
+  const [[lateRow]] = await pool.query(lateSql, lateParams);
 
   return res.json({
     activeEmployees: Number(empRow?.c || 0),
@@ -112,8 +136,46 @@ async function getDashboardSummary(req, res) {
 }
 
 async function getRecentAttendance(req, res) {
+  await ensureEmployeeRegionColumns();
   const companyId = req.user.companyId;
   const limit = Math.min(Number(req.query.limit) || 40, 200);
+  const fromDate = firstQueryParam(req.query.fromDate);
+  const toDate = firstQueryParam(req.query.toDate);
+  const lateOnlyRaw = firstQueryParam(req.query.lateOnly);
+  const lateOnly =
+    lateOnlyRaw === true ||
+    lateOnlyRaw === 'true' ||
+    lateOnlyRaw === '1' ||
+    String(lateOnlyRaw || '').toLowerCase() === 'true';
+
+  const regionFrag = await viewerRegionParams(req.user.employeeId, companyId);
+
+  const conditions = ['a.company_id = ?'];
+  const params = [companyId];
+
+  if (regionFrag.params.length) {
+    conditions.push(`TRIM(COALESCE(e.region, '')) = ?`);
+    params.push(regionFrag.params[0]);
+  }
+
+  if (isIsoDateOnly(fromDate)) {
+    conditions.push('a.workday_date >= ?');
+    params.push(fromDate);
+  }
+  if (isIsoDateOnly(toDate)) {
+    conditions.push('a.workday_date <= ?');
+    params.push(toDate);
+  }
+
+  if (lateOnly) {
+    conditions.push(`a.event_type = 'CHECK_IN'`);
+    conditions.push(
+      `ADDTIME(o.opening_time, SEC_TO_TIME(o.grace_minutes * 60)) < TIME(a.occurred_at)`
+    );
+  }
+
+  const whereSql = conditions.join(' AND ');
+  params.push(limit);
 
   const [rows] = await pool.query(
     `SELECT a.id, a.event_type, a.occurred_at, a.workday_date, a.geofence_key,
@@ -121,10 +183,10 @@ async function getRecentAttendance(req, res) {
      FROM attendance_events a
      JOIN employees e ON e.id = a.employee_id
      JOIN offices o ON o.id = a.office_id
-     WHERE a.company_id = ?
+     WHERE ${whereSql}
      ORDER BY a.occurred_at DESC
      LIMIT ?`,
-    [companyId, limit]
+    params
   );
 
   const items = (rows || []).map((r) => {
@@ -154,8 +216,18 @@ async function getRecentAttendance(req, res) {
 }
 
 async function getRecentActivity(req, res) {
+  await ensureEmployeeRegionColumns();
   const companyId = req.user.companyId;
   const limit = Math.min(Number(req.query.limit) || 25, 100);
+  const regionFrag = await viewerRegionParams(req.user.employeeId, companyId);
+
+  const actConditions = ['a.company_id = ?'];
+  const actParams = [companyId];
+  if (regionFrag.params.length) {
+    actConditions.push(`TRIM(COALESCE(e.region, '')) = ?`);
+    actParams.push(regionFrag.params[0]);
+  }
+  actParams.push(limit);
 
   const [rows] = await pool.query(
     `SELECT a.id, a.event_type, a.occurred_at, a.workday_date, a.manual_close, a.source,
@@ -163,10 +235,10 @@ async function getRecentActivity(req, res) {
      FROM attendance_events a
      JOIN employees e ON e.id = a.employee_id
      JOIN offices o ON o.id = a.office_id
-     WHERE a.company_id = ?
+     WHERE ${actConditions.join(' AND ')}
      ORDER BY a.occurred_at DESC
      LIMIT ?`,
-    [companyId, limit]
+    actParams
   );
 
   const items = (rows || []).map((r, i) => ({
@@ -213,6 +285,7 @@ function zonedDayEndExclusiveUtc(dateStr) {
 async function listQualityForAdmin(req, res) {
   await ensureInspectorDecisionColumn();
   await ensureQualityPhotosInspectorDecisionColumn();
+  await ensureEmployeeRegionColumns();
   const companyId = req.user.companyId;
   const fromDate = firstQueryParam(req.query.fromDate);
   const toDate = firstQueryParam(req.query.toDate);
@@ -223,6 +296,12 @@ async function listQualityForAdmin(req, res) {
 
   const conditions = ['q.company_id = ?'];
   const params = [companyId];
+
+  const qr = await viewerRegionParams(req.user.employeeId, companyId);
+  if (qr.params.length) {
+    conditions.push(`TRIM(COALESCE(e.region, '')) = ?`);
+    params.push(qr.params[0]);
+  }
 
   if (isIsoDateOnly(fromDate)) {
     conditions.push('q.created_at >= ?');
@@ -303,11 +382,13 @@ async function listQualityForAdmin(req, res) {
 async function getQualityDetailAdmin(req, res) {
   await ensureInspectorDecisionColumn();
   await ensureQualityPhotosInspectorDecisionColumn();
+  await ensureEmployeeRegionColumns();
   const { qualityId } = req.params;
   const companyId = req.user.companyId;
 
   const [rows] = await pool.query(
-    `SELECT q.*, e.full_name AS technician_name, e.employee_code AS technician_code
+    `SELECT q.*, e.full_name AS technician_name, e.employee_code AS technician_code,
+            e.region AS technician_region
      FROM qualities q
      JOIN employees e ON e.id = q.user_id
      WHERE q.id = ? AND q.company_id = ?
@@ -316,6 +397,12 @@ async function getQualityDetailAdmin(req, res) {
   );
   const q = rows?.[0];
   if (!q) return res.status(404).json({ error: 'Quality not found' });
+
+  const vr = await viewerRegionParams(req.user.employeeId, companyId);
+  if (vr.params.length) {
+    const tr = String(q.technician_region || '').trim();
+    if (tr !== vr.params[0]) return res.status(404).json({ error: 'Quality not found' });
+  }
 
   const [photos] = await pool.query(
     `SELECT id, photo_type, photo_url, fe, fe_comment, COALESCE(inspector_decision, 'NONE') AS inspector_decision, created_at
@@ -352,6 +439,7 @@ async function getQualityDetailAdmin(req, res) {
 async function patchQualityReview(req, res) {
   await ensureInspectorDecisionColumn();
   await ensureQualityPhotosInspectorDecisionColumn();
+  await ensureEmployeeRegionColumns();
   const { qualityId } = req.params;
   const { photoId, decision } = req.body || {};
   const companyId = req.user.companyId;
@@ -364,10 +452,18 @@ async function patchQualityReview(req, res) {
   }
 
   const [qrows] = await pool.query(
-    'SELECT id FROM qualities WHERE id = ? AND company_id = ? LIMIT 1',
+    `SELECT q.id, TRIM(COALESCE(e.region, '')) AS tech_region
+     FROM qualities q
+     JOIN employees e ON e.id = q.user_id
+     WHERE q.id = ? AND q.company_id = ?
+     LIMIT 1`,
     [qualityId, companyId]
   );
   if (!qrows?.length) return res.status(404).json({ error: 'Quality not found' });
+  const vr = await viewerRegionParams(req.user.employeeId, companyId);
+  if (vr.params.length && String(qrows[0].tech_region || '') !== vr.params[0]) {
+    return res.status(404).json({ error: 'Quality not found' });
+  }
 
   const [prows] = await pool.query(
     'SELECT id FROM quality_photos WHERE id = ? AND quality_id = ? LIMIT 1',

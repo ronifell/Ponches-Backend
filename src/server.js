@@ -109,6 +109,9 @@ async function workdayAutoClosureJob() {
 }
 
 async function main() {
+  const { ensureEmployeeRegionColumns } = require('./db/ensureEmployeeRegion');
+  await ensureEmployeeRegionColumns();
+
   const app = createApp();
   const env = require('./config/env');
   const port = process.env.PORT ? Number(process.env.PORT) : undefined;

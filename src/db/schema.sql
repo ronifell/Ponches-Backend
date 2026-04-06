@@ -57,6 +57,10 @@ ALTER TABLE employees
 ALTER TABLE employees
   MODIFY COLUMN role ENUM('EMPLOYEE','SUPERVISOR','INSPECTOR','ADMIN') NOT NULL DEFAULT 'EMPLOYEE';
 
+ALTER TABLE employees
+  ADD COLUMN region VARCHAR(128) NULL,
+  ADD COLUMN card_number VARCHAR(64) NULL;
+
 -- Orders represent a customer location used for photo validation.
 CREATE TABLE IF NOT EXISTS customer_orders (
   order_number VARCHAR(128) PRIMARY KEY,

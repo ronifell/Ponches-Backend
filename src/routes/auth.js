@@ -2,6 +2,7 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { pool } = require('../db/pool');
+const { ensureEmployeeRegionColumns } = require('../db/ensureEmployeeRegion');
 const env = require('../config/env');
 const { sendEmail } = require('../services/notify');
 
@@ -87,6 +88,7 @@ async function login(req, res) {
 
 /** Same as login but rejects non-ADMIN users (Flupy Time web admin panel). */
 async function adminLogin(req, res) {
+  await ensureEmployeeRegionColumns();
   const { employeeCode, password, companyId } = req.body || {};
   if (!employeeCode || !password) {
     return res.status(400).json({ error: 'employeeCode and password are required' });
@@ -100,7 +102,7 @@ async function adminLogin(req, res) {
   }
 
   const [rows] = await pool.query(
-    `SELECT e.id, e.employee_code, e.company_id, e.office_id, e.geofence_key, e.role, e.full_name, e.password_hash, e.employee_type, e.supervisor_id, e.is_supervisor, o.name AS office_name, c.name AS company_name
+    `SELECT e.id, e.employee_code, e.company_id, e.office_id, e.geofence_key, e.role, e.full_name, e.password_hash, e.employee_type, e.supervisor_id, e.is_supervisor, e.region, o.name AS office_name, c.name AS company_name
      FROM employees e
      LEFT JOIN offices o ON o.id = e.office_id
      LEFT JOIN companies c ON c.id = e.company_id
@@ -143,7 +145,8 @@ async function adminLogin(req, res) {
       geofenceKey: employee.geofence_key || null,
       officeName: employee.office_name || 'Office',
       companyId: employee.company_id,
-      companyName: employee.company_name || 'Company'
+      companyName: employee.company_name || 'Company',
+      region: employee.region || null
     }
   });
 }
