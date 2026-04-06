@@ -1,4 +1,5 @@
 const { pool } = require('../db/pool');
+const { ensureQualityPhotosInspectorDecisionColumn } = require('../db/ensureQualityPhotoInspector');
 const { authRequired, requireRole } = require('../middleware/auth');
 const { DateTime } = require('luxon');
 
@@ -15,6 +16,55 @@ async function ensureInspectorDecisionColumn() {
     if (e.code !== 'ER_DUP_FIELDNAME') throw e;
   }
   inspectorDecisionColumnEnsured = true;
+}
+
+/** Roll up per-photo inspector decisions into qualities.status / inspector_decision for list filters. */
+async function recomputeQualityFromPhotos(qualityId, companyId) {
+  const [qrows] = await pool.query(
+    'SELECT id FROM qualities WHERE id = ? AND company_id = ? LIMIT 1',
+    [qualityId, companyId]
+  );
+  if (!qrows?.length) return;
+
+  const [photos] = await pool.query(
+    `SELECT COALESCE(inspector_decision, 'NONE') AS d FROM quality_photos WHERE quality_id = ?`,
+    [qualityId]
+  );
+  if (!photos?.length) {
+    await pool.query(
+      `UPDATE qualities SET status = 'PENDING', inspector_decision = 'NONE', updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND company_id = ?`,
+      [qualityId, companyId]
+    );
+    return;
+  }
+
+  const decisions = photos.map((p) => String(p.d || 'NONE').toUpperCase());
+  const anyError = decisions.some((d) => d === 'ERROR');
+  const allOk = decisions.every((d) => d === 'OK');
+  const anyFe = decisions.some((d) => d === 'FE');
+
+  let status;
+  let inspectorDecision;
+  if (anyError) {
+    status = 'REJECTED';
+    inspectorDecision = 'ERROR';
+  } else if (allOk) {
+    status = 'APPROVED';
+    inspectorDecision = 'OK';
+  } else if (anyFe) {
+    status = 'IN_REVIEW';
+    inspectorDecision = 'FE';
+  } else {
+    status = 'IN_REVIEW';
+    inspectorDecision = 'NONE';
+  }
+
+  await pool.query(
+    `UPDATE qualities SET status = ?, inspector_decision = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND company_id = ?`,
+    [status, inspectorDecision, qualityId, companyId]
+  );
 }
 
 function todayWorkdayDate() {
@@ -162,6 +212,7 @@ function zonedDayEndExclusiveUtc(dateStr) {
 
 async function listQualityForAdmin(req, res) {
   await ensureInspectorDecisionColumn();
+  await ensureQualityPhotosInspectorDecisionColumn();
   const companyId = req.user.companyId;
   const fromDate = firstQueryParam(req.query.fromDate);
   const toDate = firstQueryParam(req.query.toDate);
@@ -251,6 +302,7 @@ async function listQualityForAdmin(req, res) {
 
 async function getQualityDetailAdmin(req, res) {
   await ensureInspectorDecisionColumn();
+  await ensureQualityPhotosInspectorDecisionColumn();
   const { qualityId } = req.params;
   const companyId = req.user.companyId;
 
@@ -266,7 +318,7 @@ async function getQualityDetailAdmin(req, res) {
   if (!q) return res.status(404).json({ error: 'Quality not found' });
 
   const [photos] = await pool.query(
-    `SELECT id, photo_type, photo_url, fe, fe_comment, created_at
+    `SELECT id, photo_type, photo_url, fe, fe_comment, COALESCE(inspector_decision, 'NONE') AS inspector_decision, created_at
      FROM quality_photos
      WHERE quality_id = ?
      ORDER BY created_at ASC`,
@@ -291,6 +343,7 @@ async function getQualityDetailAdmin(req, res) {
       photoUrl: p.photo_url,
       fe: Boolean(p.fe),
       feComment: p.fe_comment,
+      inspectorDecision: String(p.inspector_decision || 'NONE').toUpperCase(),
       createdAt: p.created_at
     }))
   });
@@ -298,31 +351,48 @@ async function getQualityDetailAdmin(req, res) {
 
 async function patchQualityReview(req, res) {
   await ensureInspectorDecisionColumn();
+  await ensureQualityPhotosInspectorDecisionColumn();
   const { qualityId } = req.params;
-  const { decision } = req.body || {};
+  const { photoId, decision } = req.body || {};
   const companyId = req.user.companyId;
 
+  if (!photoId || typeof photoId !== 'string') {
+    return res.status(400).json({ error: 'photoId is required' });
+  }
   if (!['FE', 'ERROR', 'OK'].includes(decision)) {
     return res.status(400).json({ error: 'decision must be FE, ERROR, or OK' });
   }
 
-  const [rows] = await pool.query(
-    'SELECT id, status FROM qualities WHERE id = ? AND company_id = ? LIMIT 1',
+  const [qrows] = await pool.query(
+    'SELECT id FROM qualities WHERE id = ? AND company_id = ? LIMIT 1',
     [qualityId, companyId]
   );
-  if (!rows?.length) return res.status(404).json({ error: 'Quality not found' });
+  if (!qrows?.length) return res.status(404).json({ error: 'Quality not found' });
 
-  let nextStatus = rows[0].status;
-  if (decision === 'OK') nextStatus = 'APPROVED';
-  else if (decision === 'ERROR') nextStatus = 'REJECTED';
-  else if (decision === 'FE') nextStatus = 'IN_REVIEW';
+  const [prows] = await pool.query(
+    'SELECT id FROM quality_photos WHERE id = ? AND quality_id = ? LIMIT 1',
+    [photoId, qualityId]
+  );
+  if (!prows?.length) return res.status(404).json({ error: 'Photo not found' });
 
   await pool.query(
-    `UPDATE qualities SET inspector_decision = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND company_id = ?`,
-    [decision, nextStatus, qualityId, companyId]
+    `UPDATE quality_photos SET inspector_decision = ? WHERE id = ? AND quality_id = ?`,
+    [decision, photoId, qualityId]
   );
 
-  return res.json({ ok: true, status: nextStatus, inspectorDecision: decision });
+  await recomputeQualityFromPhotos(qualityId, companyId);
+
+  const [updated] = await pool.query(
+    'SELECT status, inspector_decision FROM qualities WHERE id = ? LIMIT 1',
+    [qualityId]
+  );
+  const row = updated?.[0];
+  return res.json({
+    ok: true,
+    status: row?.status,
+    inspectorDecision: row?.inspector_decision || 'NONE',
+    photoInspectorDecision: decision
+  });
 }
 
 module.exports = function registerAdminRoutes(app) {

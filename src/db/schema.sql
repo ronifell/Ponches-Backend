@@ -158,6 +158,7 @@ CREATE TABLE IF NOT EXISTS quality_photos (
   photo_url VARCHAR(512) NOT NULL,
   fe TINYINT(1) NOT NULL DEFAULT 0,
   fe_comment VARCHAR(1024) NULL,
+  inspector_decision ENUM('NONE','FE','ERROR','OK') NOT NULL DEFAULT 'NONE',
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_quality_photos_quality FOREIGN KEY (quality_id) REFERENCES qualities(id) ON DELETE CASCADE,
   INDEX idx_quality_photos_quality (quality_id)

@@ -4,6 +4,7 @@ const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
 const env = require('../config/env');
 const { pool } = require('../db/pool');
+const { ensureQualityPhotosInspectorDecisionColumn } = require('../db/ensureQualityPhotoInspector');
 const { authRequired } = require('../middleware/auth');
 const { sendEmail, sendFcm } = require('../services/notify');
 const {
@@ -295,6 +296,7 @@ module.exports = function registerQualityRoutes(app) {
 
   app.get('/quality/:qualityId', authRequired, async (req, res) => {
     await ensureQualitiesStbCountColumn();
+    await ensureQualityPhotosInspectorDecisionColumn();
     const { qualityId } = req.params;
     const [rows] = await pool.query(
       `SELECT id, user_id, order_id, work_type, stb_count, status, created_at, updated_at
@@ -307,7 +309,7 @@ module.exports = function registerQualityRoutes(app) {
     if (!quality) return res.status(404).json({ error: 'Quality not found' });
 
     const [photos] = await pool.query(
-      `SELECT id, photo_type, photo_url, fe, fe_comment, created_at
+      `SELECT id, photo_type, photo_url, fe, fe_comment, COALESCE(inspector_decision, 'NONE') AS inspector_decision, created_at
        FROM quality_photos
        WHERE quality_id = ?
        ORDER BY created_at ASC`,
@@ -321,6 +323,7 @@ module.exports = function registerQualityRoutes(app) {
         photoUrl: p.photo_url,
         fe: Boolean(p.fe),
         feComment: p.fe_comment,
+        inspectorDecision: String(p.inspector_decision || 'NONE').toUpperCase(),
         createdAt: p.created_at
       }))
     });
