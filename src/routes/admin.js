@@ -137,9 +137,56 @@ async function getRecentActivity(req, res) {
   return res.json({ items });
 }
 
+function firstQueryParam(v) {
+  if (v == null) return undefined;
+  if (Array.isArray(v)) return v[0];
+  return v;
+}
+
+function isIsoDateOnly(s) {
+  return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s);
+}
+
+function isUuidLike(s) {
+  return typeof s === 'string' && /^[0-9a-f-]{36}$/i.test(s.trim());
+}
+
+/** Calendar-day bounds in TZ → UTC Date for TIMESTAMP compare (avoids MySQL DATE() TZ drift). */
+function zonedDayStartUtc(dateStr) {
+  return DateTime.fromISO(String(dateStr), { zone: TZ }).startOf('day').toUTC().toJSDate();
+}
+
+function zonedDayEndExclusiveUtc(dateStr) {
+  return DateTime.fromISO(String(dateStr), { zone: TZ }).startOf('day').plus({ days: 1 }).toUTC().toJSDate();
+}
+
 async function listQualityForAdmin(req, res) {
   await ensureInspectorDecisionColumn();
   const companyId = req.user.companyId;
+  const fromDate = firstQueryParam(req.query.fromDate);
+  const toDate = firstQueryParam(req.query.toDate);
+  const userIdFilter =
+    firstQueryParam(req.query.userId) || firstQueryParam(req.query.employeeId);
+
+  const conditions = ['q.company_id = ?'];
+  const params = [companyId];
+
+  if (isIsoDateOnly(fromDate)) {
+    conditions.push('q.created_at >= ?');
+    params.push(zonedDayStartUtc(fromDate));
+  }
+  if (isIsoDateOnly(toDate)) {
+    conditions.push('q.created_at < ?');
+    params.push(zonedDayEndExclusiveUtc(toDate));
+  }
+  if (isUuidLike(userIdFilter)) {
+    conditions.push('q.user_id = ?');
+    params.push(String(userIdFilter).trim());
+  }
+
+  const whereSql = conditions.join(' AND ');
+  const limit = Math.min(Number(req.query.limit) || 300, 500);
+
   const [rows] = await pool.query(
     `SELECT q.id, q.user_id, q.order_id, q.work_type, q.stb_count, q.status, q.inspector_decision,
             q.created_at, q.updated_at,
@@ -149,10 +196,10 @@ async function listQualityForAdmin(req, res) {
             (SELECT qp.photo_url FROM quality_photos qp WHERE qp.quality_id = q.id ORDER BY qp.created_at ASC LIMIT 1) AS first_photo_url
      FROM qualities q
      JOIN employees e ON e.id = q.user_id
-     WHERE q.company_id = ?
+     WHERE ${whereSql}
      ORDER BY q.created_at DESC
-     LIMIT 300`,
-    [companyId]
+     LIMIT ?`,
+    [...params, limit]
   );
 
   const items = (rows || []).map((r) => ({
