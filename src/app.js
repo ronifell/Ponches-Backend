@@ -4,7 +4,14 @@ const path = require('path');
 const fs = require('fs');
 const env = require('./config/env');
 
-const { login, requestPasswordReset, verifyPasswordResetCode, resetPassword } = require('./routes/auth');
+const {
+  listCompanies,
+  login,
+  adminLogin,
+  requestPasswordReset,
+  verifyPasswordResetCode,
+  resetPassword
+} = require('./routes/auth');
 const registerEmployeeRoutes = require('./routes/employees');
 const registerAttendanceRoutes = require('./routes/attendance');
 const registerPhotoRoutes = require('./routes/photos');
@@ -14,6 +21,7 @@ const registerInviteRoutes = require('./routes/invites');
 const registerPunchRoutes = require('./routes/punches');
 const registerQualityRoutes = require('./routes/quality');
 const registerScheduleRoutes = require('./routes/schedule');
+const registerAdminRoutes = require('./routes/admin');
 
 function createApp() {
   const app = express();
@@ -29,7 +37,9 @@ function createApp() {
   fs.mkdirSync(env.uploads.uploadDir, { recursive: true });
   app.use('/uploads', express.static(env.uploads.uploadDir));
 
+  app.get('/auth/companies', listCompanies);
   app.post('/auth/login', login);
+  app.post('/auth/admin/login', adminLogin);
   app.post('/auth/forgot-password/request', requestPasswordReset);
   app.post('/auth/forgot-password/verify', verifyPasswordResetCode);
   app.post('/auth/forgot-password/reset', resetPassword);
@@ -43,6 +53,7 @@ function createApp() {
   registerPunchRoutes(app);
   registerQualityRoutes(app);
   registerScheduleRoutes(app);
+  registerAdminRoutes(app);
 
   app.get('/health', (req, res) => res.json({ ok: true }));
 

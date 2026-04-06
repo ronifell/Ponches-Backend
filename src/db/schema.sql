@@ -141,12 +141,15 @@ CREATE TABLE IF NOT EXISTS qualities (
   work_type VARCHAR(128) NOT NULL,
   stb_count TINYINT UNSIGNED NOT NULL DEFAULT 1,
   status ENUM('PENDING','IN_REVIEW','APPROVED','REJECTED') NOT NULL DEFAULT 'PENDING',
+  inspector_decision ENUM('NONE','FE','ERROR','OK') NOT NULL DEFAULT 'NONE',
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT fk_qualities_company FOREIGN KEY (company_id) REFERENCES companies(id),
   CONSTRAINT fk_qualities_user FOREIGN KEY (user_id) REFERENCES employees(id),
   INDEX idx_qualities_user_created (user_id, created_at)
 ) ENGINE=InnoDB;
+
+ALTER TABLE qualities ADD COLUMN inspector_decision ENUM('NONE','FE','ERROR','OK') NOT NULL DEFAULT 'NONE';
 
 CREATE TABLE IF NOT EXISTS quality_photos (
   id CHAR(36) PRIMARY KEY,

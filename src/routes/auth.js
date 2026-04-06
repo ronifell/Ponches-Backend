@@ -20,18 +20,34 @@ async function ensurePasswordResetTable() {
   );
 }
 
+async function listCompanies(_req, res) {
+  const [rows] = await pool.query(
+    `SELECT id, name FROM companies ORDER BY name ASC`
+  );
+  return res.json({
+    items: (rows || []).map((r) => ({ id: r.id, name: r.name }))
+  });
+}
+
 async function login(req, res) {
-  const { employeeCode, password } = req.body || {};
+  const { employeeCode, password, companyId } = req.body || {};
   if (!employeeCode || !password) {
     return res.status(400).json({ error: 'employeeCode and password are required' });
+  }
+
+  const params = [employeeCode];
+  let where = 'e.employee_code = ?';
+  if (companyId) {
+    where += ' AND e.company_id = ?';
+    params.push(companyId);
   }
 
   const [rows] = await pool.query(
     `SELECT e.id, e.employee_code, e.company_id, e.office_id, e.geofence_key, e.role, e.full_name, e.password_hash, e.employee_type, e.supervisor_id, e.is_supervisor, o.name AS office_name
      FROM employees e
      LEFT JOIN offices o ON o.id = e.office_id
-     WHERE e.employee_code = ? LIMIT 1`,
-    [employeeCode]
+     WHERE ${where} LIMIT 1`,
+    params
   );
   const employee = rows?.[0];
   if (!employee) return res.status(401).json({ error: 'Invalid credentials' });
@@ -65,6 +81,69 @@ async function login(req, res) {
       geofenceKey: employee.geofence_key || null,
       officeName: employee.office_name || 'Office',
       companyId: employee.company_id
+    }
+  });
+}
+
+/** Same as login but rejects non-ADMIN users (Flupy Time web admin panel). */
+async function adminLogin(req, res) {
+  const { employeeCode, password, companyId } = req.body || {};
+  if (!employeeCode || !password) {
+    return res.status(400).json({ error: 'employeeCode and password are required' });
+  }
+
+  const params = [employeeCode];
+  let where = 'e.employee_code = ?';
+  if (companyId) {
+    where += ' AND e.company_id = ?';
+    params.push(companyId);
+  }
+
+  const [rows] = await pool.query(
+    `SELECT e.id, e.employee_code, e.company_id, e.office_id, e.geofence_key, e.role, e.full_name, e.password_hash, e.employee_type, e.supervisor_id, e.is_supervisor, o.name AS office_name, c.name AS company_name
+     FROM employees e
+     LEFT JOIN offices o ON o.id = e.office_id
+     LEFT JOIN companies c ON c.id = e.company_id
+     WHERE ${where} LIMIT 1`,
+    params
+  );
+  const employee = rows?.[0];
+  if (!employee) return res.status(401).json({ error: 'Invalid credentials' });
+
+  if (employee.role !== 'ADMIN') {
+    return res.status(403).json({ error: 'Administrator access only' });
+  }
+
+  const ok = await bcrypt.compare(password, employee.password_hash);
+  if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+
+  const token = jwt.sign(
+    {
+      employeeId: employee.id,
+      companyId: employee.company_id,
+      officeId: employee.office_id,
+      geofenceKey: employee.geofence_key || null,
+      role: employee.role
+    },
+    env.jwt.secret,
+    { expiresIn: env.jwt.expiresIn }
+  );
+
+  return res.json({
+    token,
+    employee: {
+      id: employee.id,
+      employeeCode: employee.employee_code,
+      role: employee.role,
+      employeeType: employee.employee_type,
+      supervisorId: employee.supervisor_id,
+      isSupervisor: Boolean(employee.is_supervisor),
+      fullName: employee.full_name,
+      officeId: employee.office_id,
+      geofenceKey: employee.geofence_key || null,
+      officeName: employee.office_name || 'Office',
+      companyId: employee.company_id,
+      companyName: employee.company_name || 'Company'
     }
   });
 }
@@ -212,5 +291,12 @@ async function resetPassword(req, res) {
   return res.json({ ok: true });
 }
 
-module.exports = { login, requestPasswordReset, verifyPasswordResetCode, resetPassword };
+module.exports = {
+  listCompanies,
+  login,
+  adminLogin,
+  requestPasswordReset,
+  verifyPasswordResetCode,
+  resetPassword
+};
 
