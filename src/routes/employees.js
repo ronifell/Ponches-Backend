@@ -18,8 +18,7 @@ async function createEmployee(req, res) {
     employeeType = 'CENTRALIZED',
     supervisorId = null,
     isSupervisor = false,
-    region: regionBody = undefined,
-    cardNumber: cardNumberBody = undefined
+    region: regionBody = undefined
   } = req.body || {};
 
   if (!employeeCode || !password || !fullName || !companyId || !geofenceKey) {
@@ -87,16 +86,11 @@ async function createEmployee(req, res) {
     );
     regionVal = vr?.[0]?.r ? String(vr[0].r).trim().slice(0, 128) : '';
   }
-  const cardVal =
-    cardNumberBody !== undefined && cardNumberBody !== null
-      ? String(cardNumberBody).trim().slice(0, 64)
-      : '';
-
   const employeeId = uuidv4();
   const passwordHash = await bcrypt.hash(password, 10);
   await pool.query(
-    `INSERT INTO employees (id, employee_code, company_id, office_id, geofence_key, role, full_name, password_hash, email, employee_type, supervisor_id, is_supervisor, region, card_number)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO employees (id, employee_code, company_id, office_id, geofence_key, role, full_name, password_hash, email, employee_type, supervisor_id, is_supervisor, region)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       employeeId,
       employeeCode,
@@ -110,8 +104,7 @@ async function createEmployee(req, res) {
       employeeType,
       resolvedSupervisorId,
       isSupervisor ? 1 : 0,
-      regionVal || null,
-      cardVal || null
+      regionVal || null
     ]
   );
 
@@ -124,7 +117,7 @@ async function getEmployee(req, res) {
   const { id } = req.params;
   const [rows] = await pool.query(
     `SELECT id, employee_code, company_id, office_id, geofence_key, role, full_name, email, fcm_token, employee_type, supervisor_id, is_supervisor,
-            region, card_number
+            region
      FROM employees WHERE id = ? LIMIT 1`,
     [id]
   );
@@ -166,8 +159,7 @@ async function getEmployee(req, res) {
     fullName: employee.full_name,
     email: employee.email,
     fcmToken: employee.fcm_token,
-    region: employee.region || null,
-    cardNumber: employee.card_number || null
+    region: employee.region || null
   });
 }
 
@@ -185,8 +177,7 @@ async function updateEmployee(req, res) {
     employeeType,
     supervisorId,
     isSupervisor,
-    region: regionBody,
-    cardNumber: cardNumberBody
+    region: regionBody
   } = req.body || {};
 
   const [rows] = await pool.query(
@@ -218,8 +209,7 @@ async function updateEmployee(req, res) {
       officeId !== undefined ||
       geofenceKey !== undefined ||
       role !== undefined ||
-      regionBody !== undefined ||
-      cardNumberBody !== undefined
+      regionBody !== undefined
     ) {
       return res.status(403).json({ error: 'Forbidden' });
     }
@@ -319,14 +309,6 @@ async function updateEmployee(req, res) {
       params.push(rv || null);
     }
   }
-  if (cardNumberBody !== undefined && isAdminOrSupervisor) {
-    const cv =
-      cardNumberBody === null || cardNumberBody === ''
-        ? null
-        : String(cardNumberBody).trim().slice(0, 64);
-    updates.push('card_number = ?');
-    params.push(cv || null);
-  }
   if (password) {
     updates.push('password_hash = ?');
     params.push(await bcrypt.hash(password, 10));
@@ -363,14 +345,14 @@ module.exports = function registerEmployeeRoutes(app) {
     }
 
     if (search) {
-      conditions.push('(e.employee_code LIKE ? OR e.card_number LIKE ?)');
+      conditions.push('e.employee_code LIKE ?');
       const like = `%${search.replace(/%/g, '\\%').replace(/_/g, '\\_')}%`;
-      params.push(like, like);
+      params.push(like);
     }
 
     const whereSql = conditions.join(' AND ');
     const [rows] = await pool.query(
-      `SELECT e.id, e.employee_code, e.full_name, e.role, e.region, e.card_number
+      `SELECT e.id, e.employee_code, e.full_name, e.role, e.region
        FROM employees e
        WHERE ${whereSql}
        ORDER BY e.full_name ASC`,
@@ -382,8 +364,7 @@ module.exports = function registerEmployeeRoutes(app) {
         employeeCode: r.employee_code,
         fullName: r.full_name,
         role: r.role,
-        region: r.region || null,
-        cardNumber: r.card_number || null
+        region: r.region || null
       }))
     });
   });
