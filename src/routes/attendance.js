@@ -3,105 +3,7 @@ const { authRequired } = require('../middleware/auth');
 const { parseOccuredAt, toWorkdayDate } = require('../utils/timezone');
 const { enforceEmployeeManualWorkdayClose } = require('../utils/workdayClosePolicy');
 const { notifySuperManagerAttendanceRecord } = require('../services/superManagerAttendanceNotify');
-const { sendEmail, sendFcm } = require('../services/notify');
-
-async function getSupervisorsForOffice(officeId) {
-  const [rows] = await pool.query(
-    'SELECT email, fcm_token FROM employees WHERE office_id = ? AND role = ? AND email IS NOT NULL',
-    [officeId, 'SUPERVISOR']
-  );
-  return rows || [];
-}
-
-async function getEmployeeContacts(employeeId) {
-  const [rows] = await pool.query(
-    'SELECT email, fcm_token FROM employees WHERE id = ? LIMIT 1',
-    [employeeId]
-  );
-  return rows?.[0] || null;
-}
-
-async function computeLateMinutes({ officeId, occurredAtDt }) {
-  const [rows] = await pool.query(
-    'SELECT opening_time, grace_minutes FROM offices WHERE id = ? LIMIT 1',
-    [officeId]
-  );
-  const office = rows?.[0];
-  if (!office) return null;
-
-  const [hh, mm] = String(office.opening_time).split(':').map((x) => Number(x));
-  const openingTime = occurredAtDt.set({ hour: hh, minute: mm, second: 0, millisecond: 0 });
-  const deadline = openingTime.plus({ minutes: Number(office.grace_minutes || 0) });
-
-  if (occurredAtDt <= deadline) return 0;
-  // Round to the next whole minute so the notification feels fair.
-  const diffMinutes = occurredAtDt.diff(deadline, 'minutes').minutes;
-  return Math.ceil(diffMinutes);
-}
-
-async function handleCheckInNotifications({ employeeId, officeId, occurredAtDt }) {
-  const supervisors = await getSupervisorsForOffice(officeId);
-  const lateMinutes = await computeLateMinutes({ officeId, occurredAtDt });
-  if (lateMinutes === null || lateMinutes <= 0) return;
-
-  const dateStr = occurredAtDt.toFormat('yyyy-LL-dd');
-  const subject = `Late arrival (${dateStr})`;
-  const text = `Employee ${employeeId} arrived late by ~${lateMinutes} minutes.`;
-
-  const employee = await getEmployeeContacts(employeeId);
-
-  // Supervisors already get the admin-style attendance email via notifySuperManagerAttendanceRecord().
-  // So for late-arrival we avoid duplicate supervisor emails:
-  // - email only to the employee (if present)
-  // - push notifications to employee and supervisors (if they have FCM tokens)
-  const emailTargets = employee?.email ? [employee] : [];
-  const fcmTargets = [
-    ...(employee?.fcm_token ? [employee] : []),
-    ...supervisors.filter((s) => s?.fcm_token)
-  ];
-
-  await Promise.all([
-    ...emailTargets.map(async (t) => sendEmail({ to: t.email, subject, text })),
-    ...fcmTargets.map(async (t) =>
-      sendFcm({
-        toToken: t.fcm_token,
-        title: 'Late arrival',
-        body: text
-      })
-    )
-  ]);
-}
-
-async function handleWorkdayClosedNotifications({ employeeId, officeId, manualClose, occurredAtDt }) {
-  if (manualClose) return;
-  const supervisors = await getSupervisorsForOffice(officeId);
-  const employee = await getEmployeeContacts(employeeId);
-
-  const dateStr = occurredAtDt.toFormat('yyyy-LL-dd');
-  const subject = `Workday auto-closed (${dateStr})`;
-  const text = `Employee workday was not manually closed by 8:00 PM (auto closure).`;
-
-  // Supervisors already get the admin-style attendance email via notifySuperManagerAttendanceRecord().
-  // So for workday-closed we avoid duplicate supervisor emails:
-  // - email only to the employee (if present)
-  // - push notifications to employee and supervisors (if they have FCM tokens)
-  const emailTargets = employee?.email ? [employee] : [];
-  const fcmTargets = [
-    ...(employee?.fcm_token ? [employee] : []),
-    ...supervisors.filter((s) => s?.fcm_token)
-  ];
-
-  await Promise.all([
-    ...emailTargets.map(async (t) => sendEmail({ to: t.email, subject, text })),
-    ...fcmTargets.map(async (t) =>
-      sendFcm({
-        toToken: t.fcm_token,
-        title: 'Workday auto-closed',
-        body: subject
-      })
-    )
-  ]);
-}
+const { notifyLateArrivalIfNeeded, notifyWorkdayAutoClosed } = require('../services/attendanceNotify');
 
 async function isWorkdayAlreadyClosed(employeeId, workdayDate) {
   const [rows] = await pool.query(
@@ -124,7 +26,9 @@ module.exports = function registerAttendanceRoutes(app) {
       source = 'GEOFENCE',
       occurredAt,
       officeId,
-      geofenceKey = null
+      geofenceKey = null,
+      latitude: latRaw,
+      longitude: lngRaw
     } = req.body || {};
 
     if (!eventType) {
@@ -135,6 +39,15 @@ module.exports = function registerAttendanceRoutes(app) {
     }
     if (!['GEOFENCE', 'MANUAL', 'AUTO'].includes(source)) {
       return res.status(400).json({ error: 'Invalid source' });
+    }
+
+    const latitude = latRaw != null && latRaw !== '' ? Number(latRaw) : null;
+    const longitude = lngRaw != null && lngRaw !== '' ? Number(lngRaw) : null;
+    if (latitude != null && !Number.isFinite(latitude)) {
+      return res.status(400).json({ error: 'Invalid latitude' });
+    }
+    if (longitude != null && !Number.isFinite(longitude)) {
+      return res.status(400).json({ error: 'Invalid longitude' });
     }
 
     const employeeId = req.user.employeeId;
@@ -210,22 +123,26 @@ module.exports = function registerAttendanceRoutes(app) {
       source,
       occurredAtFormatted,
       manualClose: Boolean(manualClose),
-      geofenceKey: resolvedGeofenceKey
+      geofenceKey: resolvedGeofenceKey,
+      omitSupervisorsForEmail: eventType === 'WORKDAY_CLOSED' && source === 'AUTO'
     }).catch((e) => console.warn('Super manager attendance email failed:', e.message || e));
 
     if (eventType === 'CHECK_IN') {
-      // Best effort notifications (don't block API)
-      handleCheckInNotifications({ employeeId, officeId: resolvedOfficeId, occurredAtDt }).catch((e) =>
-        console.warn('Late arrival notification failed:', e)
-      );
-    }
-    if (eventType === 'WORKDAY_CLOSED') {
-      handleWorkdayClosedNotifications({
+      notifyLateArrivalIfNeeded({
         employeeId,
         officeId: resolvedOfficeId,
-        manualClose: Boolean(manualClose),
+        occurredAtDt,
+        latitude,
+        longitude,
+        geofenceKey: resolvedGeofenceKey
+      }).catch((e) => console.warn('Late arrival notification failed:', e));
+    }
+    if (eventType === 'WORKDAY_CLOSED' && source === 'AUTO' && !manualClose) {
+      notifyWorkdayAutoClosed({
+        employeeId,
+        officeId: resolvedOfficeId,
         occurredAtDt
-      }).catch((e) => console.warn('Workday close notification failed:', e));
+      }).catch((e) => console.warn('Workday auto-close notification failed:', e));
     }
 
     return res.status(201).json({ ok: true });
@@ -287,4 +204,3 @@ module.exports = function registerAttendanceRoutes(app) {
     return res.json({ items });
   });
 };
-

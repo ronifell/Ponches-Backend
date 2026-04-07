@@ -4,6 +4,7 @@ const { ensureQualityPhotosInspectorDecisionColumn } = require('../db/ensureQual
 const { viewerRegionParams } = require('../lib/regionScope');
 const { authRequired, requireRole } = require('../middleware/auth');
 const { DateTime } = require('luxon');
+const { notifyQualityInspectionError } = require('../services/qualityInspectionNotify');
 
 const TZ = 'America/Santo_Domingo';
 
@@ -477,6 +478,22 @@ async function patchQualityReview(req, res) {
   );
 
   await recomputeQualityFromPhotos(qualityId, companyId);
+
+  if (decision === 'ERROR') {
+    const [qinfo] = await pool.query(
+      'SELECT order_id, user_id FROM qualities WHERE id = ? AND company_id = ? LIMIT 1',
+      [qualityId, companyId]
+    );
+    const qi = qinfo?.[0];
+    if (qi) {
+      notifyQualityInspectionError({
+        companyId,
+        qualityId,
+        technicianId: qi.user_id,
+        orderId: qi.order_id
+      }).catch((e) => console.warn('Quality inspection error notification failed:', e.message || e));
+    }
+  }
 
   const [updated] = await pool.query(
     'SELECT status, inspector_decision FROM qualities WHERE id = ? LIMIT 1',

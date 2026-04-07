@@ -70,98 +70,87 @@ function normalizePhotoType(photoType) {
   return String(photoType || 'GENERAL').trim().toUpperCase();
 }
 
-async function notifyQualityUpload({
-  companyId,
-  uploaderId,
-  qualityId,
-  orderId,
-  workType,
-  photoType,
-  fe,
-  feComment
-}) {
+function trimEmail(value) {
+  if (value == null) return null;
+  const t = String(value).trim();
+  return t.length ? t : null;
+}
+
+/** When the technician completes all required photos: admin emails (same region) + supervisor push only. */
+async function notifyQualityOrderComplete({ companyId, qualityId, orderId, uploaderId, workType }) {
+  const [feRow] = await pool.query(
+    'SELECT MAX(fe) AS any_fe FROM quality_photos WHERE quality_id = ?',
+    [qualityId]
+  );
+  const anyFe = Boolean(Number(feRow?.[0]?.any_fe || 0));
+
   const [uploaderRows] = await pool.query(
-    `SELECT employee_code, full_name, supervisor_id
+    `SELECT employee_code, full_name, supervisor_id, TRIM(COALESCE(region, '')) AS region
      FROM employees
      WHERE id = ? AND company_id = ?
      LIMIT 1`,
     [uploaderId, companyId]
   );
   const uploader = uploaderRows?.[0];
+  const uploaderRegion = String(uploader?.region || '').trim();
 
-  const [adminRows] = await pool.query(
-    `SELECT email, fcm_token
-     FROM employees
-     WHERE company_id = ? AND role = 'ADMIN'`,
-    [companyId]
-  );
+  let adminSql = `SELECT email FROM employees WHERE company_id = ? AND role = 'ADMIN' AND email IS NOT NULL`;
+  const adminParams = [companyId];
+  if (uploaderRegion) {
+    adminSql += ` AND TRIM(COALESCE(region, '')) = ?`;
+    adminParams.push(uploaderRegion);
+  }
+  const [adminRows] = await pool.query(adminSql, adminParams);
 
-  let supervisorRows = [];
+  let supervisorToken = null;
   if (uploader?.supervisor_id) {
-    const [rows] = await pool.query(
-      `SELECT email, fcm_token
-       FROM employees
-       WHERE id = ? AND company_id = ?
-       LIMIT 1`,
+    const [sup] = await pool.query(
+      `SELECT fcm_token FROM employees WHERE id = ? AND company_id = ? LIMIT 1`,
       [uploader.supervisor_id, companyId]
     );
-    supervisorRows = rows || [];
+    supervisorToken = String(sup?.[0]?.fcm_token || '').trim() || null;
   } else {
-    const [rows] = await pool.query(
-      `SELECT email, fcm_token
-       FROM employees
-       WHERE company_id = ? AND role = 'SUPERVISOR'`,
+    const [sup] = await pool.query(
+      `SELECT fcm_token FROM employees WHERE company_id = ? AND role = 'SUPERVISOR' LIMIT 1`,
       [companyId]
     );
-    supervisorRows = rows || [];
+    supervisorToken = String(sup?.[0]?.fcm_token || '').trim() || null;
   }
 
-  const targets = [...(adminRows || []), ...supervisorRows];
-  const seenEmails = new Set();
-  const seenTokens = new Set();
-  const emailTargets = [];
-  const pushTargets = [];
+  const [coRows] = await pool.query('SELECT notification_email FROM companies WHERE id = ? LIMIT 1', [companyId]);
+  const corpFrom = trimEmail(coRows?.[0]?.notification_email);
 
-  for (const t of targets) {
-    const email = String(t?.email || '').trim().toLowerCase();
-    if (email && !seenEmails.has(email)) {
-      seenEmails.add(email);
-      emailTargets.push(email);
-    }
-    const token = String(t?.fcm_token || '').trim();
-    if (token && !seenTokens.has(token)) {
-      seenTokens.add(token);
-      pushTargets.push(token);
-    }
-  }
-
-  if (emailTargets.length === 0 && pushTargets.length === 0) return;
-
+  const orderStr = String(orderId);
+  const subject = anyFe ? `FE ${orderStr}` : orderStr;
   const uploaderLabel = uploader?.employee_code || uploader?.full_name || uploaderId;
-  const subject = `Quality upload completed · Order ${orderId}`;
-  const commentLine =
-    fe && String(feComment || '').trim()
-      ? `Technician comment (out of standard): ${String(feComment).trim()}\n`
-      : '';
   const body =
-    `A quality photo upload was completed.\n\n` +
-    `Uploader: ${uploaderLabel}\n` +
-    `Order: ${orderId}\n` +
-    `Work Type: ${workType}\n` +
-    `Photo Type: ${photoType}\n` +
-    `FE (out of standard): ${fe ? 'Yes' : 'No'}\n` +
-    commentLine +
-    `Quality ID: ${qualityId}`;
+    `Orden de calidad completada por el técnico.\n\n` +
+    `Técnico: ${uploaderLabel}\n` +
+    `Orden: ${orderStr}\n` +
+    `Tipo de trabajo: ${workType}\n` +
+    `Marcada fuera de estándar (FE): ${anyFe ? 'Sí' : 'No'}\n` +
+    `ID calidad: ${qualityId}`;
+
+  const adminEmails = [...new Set((adminRows || []).map((r) => trimEmail(r.email)).filter(Boolean))];
 
   await Promise.all([
-    ...emailTargets.map((to) => sendEmail({ to, subject, text: body })),
-    ...pushTargets.map((toToken) =>
-      sendFcm({
-        toToken,
-        title: 'Quality upload completed',
-        body: `Order ${orderId} · ${workType} · ${photoType}`
+    ...adminEmails.map((to) =>
+      sendEmail({
+        to,
+        subject,
+        text: body,
+        ...(corpFrom ? { from: corpFrom } : {})
       })
-    )
+    ),
+    ...(supervisorToken
+      ? [
+          sendFcm({
+            toToken: supervisorToken,
+            title: 'Orden de calidad completada',
+            body: `Orden ${orderStr}`
+          })
+        ]
+      : [])
   ]);
 }
 
@@ -242,18 +231,6 @@ module.exports = function registerQualityRoutes(app) {
       [photoId, qualityId, normalizedPhotoType, photoUrl, feOn ? 1 : 0, normalizedComment || null]
     );
 
-    // Best effort: notifications must not fail the upload API response.
-    notifyQualityUpload({
-      companyId: req.user.companyId,
-      uploaderId: req.user.employeeId,
-      qualityId,
-      orderId: quality.order_id,
-      workType: quality.work_type,
-      photoType: normalizedPhotoType,
-      fe: feOn,
-      feComment: normalizedComment || null
-    }).catch((e) => console.warn('Quality upload notification failed:', e.message || e));
-
     return res.status(201).json({ id: photoId, photoUrl, ok: true });
   });
 
@@ -262,12 +239,15 @@ module.exports = function registerQualityRoutes(app) {
     const { qualityId } = req.params;
 
     const [qualityRows] = await pool.query(
-      'SELECT id, company_id, work_type, stb_count, status FROM qualities WHERE id = ? LIMIT 1',
+      'SELECT id, company_id, user_id, order_id, work_type, stb_count, status FROM qualities WHERE id = ? LIMIT 1',
       [qualityId]
     );
     const quality = qualityRows?.[0];
     if (!quality) return res.status(404).json({ error: 'Quality not found' });
     if (quality.company_id !== req.user.companyId) return res.status(403).json({ error: 'Forbidden' });
+    if (String(quality.status || '').toUpperCase() !== 'PENDING') {
+      return res.status(400).json({ error: 'Order was already submitted for review' });
+    }
 
     const required = requiredPhotoTypesForWorkType(quality.work_type, Number(quality.stb_count) || 1);
     if (required.length === 0) {
@@ -295,6 +275,15 @@ module.exports = function registerQualityRoutes(app) {
        WHERE id = ?`,
       [qualityId]
     );
+
+    notifyQualityOrderComplete({
+      companyId: req.user.companyId,
+      qualityId,
+      orderId: quality.order_id,
+      uploaderId: quality.user_id,
+      workType: quality.work_type
+    }).catch((e) => console.warn('Quality complete notification failed:', e.message || e));
+
     return res.json({ ok: true, status: 'IN_REVIEW' });
   });
 

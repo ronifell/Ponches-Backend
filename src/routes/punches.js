@@ -3,6 +3,7 @@ const { authRequired } = require('../middleware/auth');
 const { parseOccuredAt, toWorkdayDate } = require('../utils/timezone');
 const { enforceEmployeeManualWorkdayClose } = require('../utils/workdayClosePolicy');
 const { notifySuperManagerAttendanceRecord } = require('../services/superManagerAttendanceNotify');
+const { notifyLateArrivalIfNeeded } = require('../services/attendanceNotify');
 
 function mapPunchToAttendanceEvent(punchType) {
   if (punchType === 'ENTRY') return 'CHECK_IN';
@@ -197,6 +198,17 @@ module.exports = function registerPunchRoutes(app) {
       manualClose,
       geofenceKey: null
     }).catch((e) => console.warn('Super manager attendance email failed:', e.message || e));
+
+    if (eventType === 'CHECK_IN') {
+      notifyLateArrivalIfNeeded({
+        employeeId,
+        officeId,
+        occurredAtDt,
+        latitude: lat,
+        longitude: lng,
+        geofenceKey: geofenceKeyForCircle
+      }).catch((e) => console.warn('Late arrival notification failed:', e.message || e));
+    }
 
     return res.status(201).json({
       ok: true,

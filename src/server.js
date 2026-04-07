@@ -2,35 +2,75 @@ const { createApp } = require('./app');
 const cron = require('node-cron');
 const { nowSantoDomingo } = require('./utils/timezone');
 const { pool } = require('./db/pool');
-const { sendEmail, sendFcm } = require('./services/notify');
+const { sendFcm } = require('./services/notify');
 const { notifySuperManagerAttendanceRecord } = require('./services/superManagerAttendanceNotify');
+const { notifyWorkdayAutoClosed } = require('./services/attendanceNotify');
 
-async function sendWorkdayAutoClosedEmailAndPush({ employeeId, officeId, occurredAtDt }) {
-  // Supervisors already get the admin-style attendance email via notifySuperManagerAttendanceRecord().
-  // This function keeps supervisor push notifications (FCM) for auto closure.
-  const [supervisors] = await pool.query(
-    `SELECT email, fcm_token
-     FROM employees
-     WHERE office_id = ? AND role = 'SUPERVISOR' AND email IS NOT NULL`,
-    [officeId]
+let eveningReminderTableEnsured = false;
+async function ensureWorkdayEveningReminderTable() {
+  if (eveningReminderTableEnsured) return;
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS workday_evening_reminder_sent (
+      employee_id CHAR(36) NOT NULL,
+      workday_date DATE NOT NULL,
+      PRIMARY KEY (employee_id, workday_date)
+    ) ENGINE=InnoDB`
   );
-  if (!supervisors?.length) return;
+  eveningReminderTableEnsured = true;
+}
 
-  const dateStr = occurredAtDt.toFormat('yyyy-LL-dd');
-  const subject = `Workday auto-closed (${dateStr})`;
-  const text = `Employee ${employeeId} workday was not manually closed by 8:00 PM (auto closure).`;
+/**
+ * ~7:00 PM reminder: employee still has an open workday (push only).
+ * Matches spec: warn before automatic closure in the evening.
+ */
+async function workdayEveningReminderJob() {
+  await ensureWorkdayEveningReminderTable();
+  const now = nowSantoDomingo();
+  if (now.hour !== 19) return;
 
-  await Promise.all(
-    supervisors.map(async (s) => {
-      if (s.fcm_token) {
-        await sendFcm({
-          toToken: s.fcm_token,
-          title: 'Workday auto-closed',
-          body: text
-        });
-      }
-    })
+  const workdayDate = now.toISODate();
+
+  const [rows] = await pool.query(
+    `SELECT DISTINCT a.employee_id
+     FROM attendance_events a
+     WHERE a.workday_date = ?
+       AND a.event_type IN ('CHECK_IN', 'MOVEMENT', 'GEOFENCE_ENTER', 'GEOFENCE_EXIT')
+       AND NOT EXISTS (
+         SELECT 1
+         FROM attendance_events b
+         WHERE b.employee_id = a.employee_id
+           AND b.workday_date = a.workday_date
+           AND b.event_type = 'WORKDAY_CLOSED'
+       )
+       AND NOT EXISTS (
+         SELECT 1
+         FROM workday_evening_reminder_sent w
+         WHERE w.employee_id = a.employee_id
+           AND w.workday_date = a.workday_date
+       )`,
+    [workdayDate]
   );
+
+  if (!rows?.length) return;
+
+  for (const r of rows) {
+    const [contacts] = await pool.query(
+      'SELECT fcm_token FROM employees WHERE id = ? LIMIT 1',
+      [r.employee_id]
+    );
+    const token = String(contacts?.[0]?.fcm_token || '').trim();
+    if (token) {
+      await sendFcm({
+        toToken: token,
+        title: 'Recordatorio de jornada',
+        body: 'Aún no cierras tu jornada. Cierra manualmente o el sistema la cerrará automáticamente más tarde.'
+      }).catch((e) => console.warn('Evening reminder FCM failed:', e.message || e));
+    }
+    await pool.query(
+      `INSERT IGNORE INTO workday_evening_reminder_sent (employee_id, workday_date) VALUES (?, ?)`,
+      [r.employee_id, workdayDate]
+    );
+  }
 }
 
 async function workdayAutoClosureJob() {
@@ -95,12 +135,12 @@ async function workdayAutoClosureJob() {
         eventType: 'WORKDAY_CLOSED',
         source: 'AUTO',
         occurredAtFormatted: occurredAtDt.toFormat('yyyy-LL-dd HH:mm'),
-        manualClose: false
+        manualClose: false,
+        omitSupervisorsForEmail: true
       }).catch((e) => console.warn('Super manager attendance email failed:', e.message || e));
     }
 
-    // Notify supervisors (best effort).
-    sendWorkdayAutoClosedEmailAndPush({
+    notifyWorkdayAutoClosed({
       employeeId: r.employee_id,
       officeId: r.office_id,
       occurredAtDt
@@ -128,8 +168,9 @@ async function main() {
     console.log(`Ponches backend listening on http://0.0.0.0:${serverPort}`);
   });
 
-  // Run job every hour; internally exits until 20:00 Santo Domingo time.
+  // Run every hour (Santo Domingo checks inside jobs).
   cron.schedule('0 * * * *', () => {
+    workdayEveningReminderJob().catch((e) => console.warn('workdayEveningReminderJob failed:', e));
     workdayAutoClosureJob().catch((e) => console.warn('workdayAutoClosureJob failed:', e));
   });
 }

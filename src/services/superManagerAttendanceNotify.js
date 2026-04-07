@@ -28,7 +28,7 @@ function trimEmail(value) {
  * - office SUPERVISORs with an email (office-scoped, same email field as admin)
  * If there are no ADMINs with email, fall back to SUPER_MANAGER_EMPLOYEE_CODE.
  */
-async function resolveAttendanceNotifyRecipients(companyId, officeId) {
+async function resolveAttendanceNotifyRecipients(companyId, officeId, { omitSupervisors = false } = {}) {
   const [adminRows] = await pool.query(
     `SELECT id, email, full_name FROM employees WHERE company_id = ? AND role = 'ADMIN'`,
     [companyId]
@@ -58,19 +58,20 @@ async function resolveAttendanceNotifyRecipients(companyId, officeId) {
     }
   }
 
-  // Office-scoped supervisor emails (these should also receive the same admin-style attendance email).
-  const supervisorRecipients = officeId
-    ? (
-        await pool.query(
-          `SELECT id, email, full_name
-           FROM employees
-           WHERE office_id = ? AND role = 'SUPERVISOR' AND email IS NOT NULL`,
-          [officeId]
-        )
-      )[0]
-        .map((r) => ({ ...r, email: trimEmail(r.email) }))
-        .filter((r) => r.email)
-    : [];
+  // Office-scoped supervisor emails (same admin-style attendance email), unless omitted (e.g. auto-close uses a dedicated supervisor email).
+  const supervisorRecipients =
+    omitSupervisors || !officeId
+      ? []
+      : (
+          await pool.query(
+            `SELECT id, email, full_name
+             FROM employees
+             WHERE office_id = ? AND role = 'SUPERVISOR' AND email IS NOT NULL`,
+            [officeId]
+          )
+        )[0]
+          .map((r) => ({ ...r, email: trimEmail(r.email) }))
+          .filter((r) => r.email);
 
   // De-dup recipients by employee id.
   const uniq = new Map();
@@ -93,9 +94,12 @@ async function notifySuperManagerAttendanceRecord({
   source,
   occurredAtFormatted,
   manualClose = false,
-  geofenceKey = null
+  geofenceKey = null,
+  omitSupervisorsForEmail = false
 }) {
-  const recipients = await resolveAttendanceNotifyRecipients(companyId, officeId);
+  const recipients = await resolveAttendanceNotifyRecipients(companyId, officeId, {
+    omitSupervisors: omitSupervisorsForEmail
+  });
   const shouldSendCompanyCopy = eventType === 'WORKDAY_CLOSED';
 
   const [actorRows] = await pool.query(
