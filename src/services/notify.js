@@ -45,9 +45,15 @@ async function sendFcm({ toToken, title, body }) {
 
   // Lazy require to avoid adding extra deps.
   const https = require('https');
+  // Data-only so Android always delivers to onMessageReceived (foreground/background). A `notification`
+  // payload is shown by the system with defaults that often hide content on the lock screen.
   const data = JSON.stringify({
     to: toToken,
-    notification: { title, body }
+    priority: 'high',
+    data: {
+      title: String(title || ''),
+      body: String(body || '')
+    }
   });
 
   await new Promise((resolve, reject) => {
