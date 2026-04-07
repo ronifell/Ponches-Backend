@@ -1,6 +1,7 @@
 const bcrypt = require('bcrypt');
 const { pool } = require('../db/pool');
 const { ensureEmployeeRegionColumns } = require('../db/ensureEmployeeRegion');
+const { isAllowedEmployeeRegion } = require('../lib/employeeRegions');
 const { viewerRegionParams } = require('../lib/regionScope');
 const { authRequired, requireRole } = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
@@ -86,6 +87,10 @@ async function createEmployee(req, res) {
     );
     regionVal = vr?.[0]?.r ? String(vr[0].r).trim().slice(0, 128) : '';
   }
+  const regionToStore = regionVal ? String(regionVal).trim() : '';
+  if (regionToStore && !isAllowedEmployeeRegion(regionToStore)) {
+    return res.status(400).json({ error: 'Invalid region. Allowed values: Este, Norte, Sur' });
+  }
   const employeeId = uuidv4();
   const passwordHash = await bcrypt.hash(password, 10);
   await pool.query(
@@ -104,7 +109,7 @@ async function createEmployee(req, res) {
       employeeType,
       resolvedSupervisorId,
       isSupervisor ? 1 : 0,
-      regionVal || null
+      regionToStore || null
     ]
   );
 
@@ -300,6 +305,9 @@ async function updateEmployee(req, res) {
   if (regionBody !== undefined && isAdminOrSupervisor) {
     const rv =
       regionBody === null || regionBody === '' ? null : String(regionBody).trim().slice(0, 128);
+    if (rv && !isAllowedEmployeeRegion(rv)) {
+      return res.status(400).json({ error: 'Invalid region. Allowed values: Este, Norte, Sur' });
+    }
     // Admins may change their own region from the profile (affects which employees they see).
     if (isSelf && req.user.role === 'ADMIN') {
       updates.push('region = ?');
