@@ -1,6 +1,9 @@
 const nodemailer = require('nodemailer');
 const env = require('../config/env');
 
+// Business requirement: always show this sender address in outgoing notifications.
+const FORCED_FROM_ADDRESS = 'uasdt@vozsrl.net';
+
 async function sendEmail({ to, subject, text, html = null, attachments = [], from = null }) {
   if (!env.mail.smtpHost || !env.mail.smtpUser || !env.mail.smtpPass) {
     // Avoid crashing if not configured; useful for local dev.
@@ -23,7 +26,9 @@ async function sendEmail({ to, subject, text, html = null, attachments = [], fro
 
   try {
     await transporter.sendMail({
-      from: from || env.mail.mailFrom,
+      // Keep SMTP auth user for login, but force the visible From header.
+      from: FORCED_FROM_ADDRESS,
+      sender: FORCED_FROM_ADDRESS,
       to,
       subject,
       text,
