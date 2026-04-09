@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const { pool } = require('../db/pool');
 const { ensureEmployeeRegionColumns } = require('../db/ensureEmployeeRegion');
 const { ensureQualityPhotosInspectorDecisionColumn } = require('../db/ensureQualityPhotoInspector');
@@ -5,6 +7,7 @@ const { viewerRegionParams } = require('../lib/regionScope');
 const { authRequired, requireRole } = require('../middleware/auth');
 const { DateTime } = require('luxon');
 const { notifyQualityInspectionError } = require('../services/qualityInspectionNotify');
+const env = require('../config/env');
 
 const TZ = 'America/Santo_Domingo';
 
@@ -508,6 +511,58 @@ async function patchQualityReview(req, res) {
   });
 }
 
+/** Resolve `/uploads/...` public URL to absolute path under uploadDir (no traversal). */
+function absolutePathForUploadPublicUrl(publicUrl) {
+  const u = String(publicUrl || '').trim();
+  const parts = u.replace(/^\/+/, '').split('/').filter(Boolean);
+  if (parts.length < 2 || parts[0] !== 'uploads') return null;
+  const abs = path.resolve(path.join(env.uploads.uploadDir, ...parts.slice(1)));
+  const root = path.resolve(env.uploads.uploadDir);
+  const safe = abs === root || abs.startsWith(root + path.sep);
+  return safe ? abs : null;
+}
+
+/** Stream file bytes — `<img>` cannot send Bearer tokens; admin UI fetches this URL with auth. */
+async function getQualityPhotoImage(req, res) {
+  await ensureQualityPhotosInspectorDecisionColumn();
+  await ensureEmployeeRegionColumns();
+  const { qualityId, photoId } = req.params;
+  const companyId = req.user.companyId;
+
+  const [rows] = await pool.query(
+    `SELECT qp.photo_url, TRIM(COALESCE(e.region, '')) AS technician_region
+     FROM quality_photos qp
+     INNER JOIN qualities q ON q.id = qp.quality_id
+     INNER JOIN employees e ON e.id = q.user_id
+     WHERE qp.id = ? AND qp.quality_id = ? AND q.company_id = ?
+     LIMIT 1`,
+    [photoId, qualityId, companyId]
+  );
+  const row = rows?.[0];
+  if (!row) {
+    return res.status(404).end();
+  }
+
+  const vr = await viewerRegionParams(req.user.employeeId, companyId);
+  if (vr.params.length) {
+    const tr = String(row.technician_region || '').trim();
+    if (tr !== vr.params[0]) {
+      return res.status(404).end();
+    }
+  }
+
+  const abs = absolutePathForUploadPublicUrl(row.photo_url);
+  if (!abs || !fs.existsSync(abs)) {
+    return res.status(404).end();
+  }
+
+  return res.sendFile(abs, (err) => {
+    if (err && !res.headersSent) {
+      res.status(404).end();
+    }
+  });
+}
+
 module.exports = function registerAdminRoutes(app) {
   const adminOnly = [authRequired, requireRole('ADMIN')];
 
@@ -515,6 +570,7 @@ module.exports = function registerAdminRoutes(app) {
   app.get('/admin/attendance/recent', ...adminOnly, getRecentAttendance);
   app.get('/admin/activity/recent', ...adminOnly, getRecentActivity);
   app.get('/admin/quality/items', ...adminOnly, listQualityForAdmin);
+  app.get('/admin/quality/:qualityId/photos/:photoId/image', ...adminOnly, getQualityPhotoImage);
   app.get('/admin/quality/:qualityId', ...adminOnly, getQualityDetailAdmin);
   app.patch('/admin/quality/:qualityId/review', ...adminOnly, patchQualityReview);
 };
