@@ -10,6 +10,11 @@ const { notifyQualityInspectionError } = require('../services/qualityInspectionN
 const env = require('../config/env');
 
 const TZ = 'America/Santo_Domingo';
+const ADMIN_QUALITY_LOG_PREFIX = '[admin-quality]';
+
+function qlog(event, meta = {}) {
+  console.log(`${ADMIN_QUALITY_LOG_PREFIX} ${event} ${JSON.stringify(meta)}`);
+}
 
 let inspectorDecisionColumnEnsured = false;
 async function ensureInspectorDecisionColumn() {
@@ -389,6 +394,8 @@ async function getQualityDetailAdmin(req, res) {
   await ensureEmployeeRegionColumns();
   const { qualityId } = req.params;
   const companyId = req.user.companyId;
+  const viewerEmployeeId = req.user.employeeId;
+  qlog('detail:start', { qualityId, companyId, viewerEmployeeId });
 
   // Accept both quality-id and photo-id to be resilient to stale/legacy clients.
   let q = null;
@@ -402,6 +409,9 @@ async function getQualityDetailAdmin(req, res) {
     [qualityId, companyId]
   );
   q = rowsByQualityId?.[0] || null;
+  if (q) {
+    qlog('detail:resolved_by_quality_id', { qualityId, resolvedQualityId: q.id });
+  }
   if (!q) {
     const [rowsByPhotoId] = await pool.query(
       `SELECT q.*, e.full_name AS technician_name, e.employee_code AS technician_code,
@@ -414,13 +424,27 @@ async function getQualityDetailAdmin(req, res) {
       [qualityId, companyId]
     );
     q = rowsByPhotoId?.[0] || null;
+    if (q) {
+      qlog('detail:resolved_by_photo_id', { requestedId: qualityId, resolvedQualityId: q.id });
+    }
   }
-  if (!q) return res.status(404).json({ error: 'Quality not found' });
+  if (!q) {
+    qlog('detail:not_found', { qualityId, companyId, viewerEmployeeId });
+    return res.status(404).json({ error: 'Quality not found' });
+  }
 
   const vr = await viewerRegionParams(req.user.employeeId, companyId);
   if (vr.params.length) {
     const tr = String(q.technician_region || '').trim();
-    if (tr !== vr.params[0]) return res.status(404).json({ error: 'Quality not found' });
+    if (tr !== vr.params[0]) {
+      qlog('detail:region_mismatch', {
+        qualityId: q.id,
+        requestedId: qualityId,
+        viewerRegion: vr.params[0],
+        technicianRegion: tr
+      });
+      return res.status(404).json({ error: 'Quality not found' });
+    }
   }
 
   const [photos] = await pool.query(
@@ -430,6 +454,11 @@ async function getQualityDetailAdmin(req, res) {
      ORDER BY created_at ASC`,
     [q.id]
   );
+  qlog('detail:success', {
+    requestedId: qualityId,
+    resolvedQualityId: q.id,
+    photoCount: Array.isArray(photos) ? photos.length : 0
+  });
 
   return res.json({
     id: q.id,
@@ -543,6 +572,8 @@ async function getQualityPhotoImage(req, res) {
   await ensureEmployeeRegionColumns();
   const { qualityId, photoId } = req.params;
   const companyId = req.user.companyId;
+  const viewerEmployeeId = req.user.employeeId;
+  qlog('image:start', { qualityId, photoId, companyId, viewerEmployeeId });
 
   const [rows] = await pool.query(
     `SELECT qp.photo_url, TRIM(COALESCE(e.region, '')) AS technician_region
@@ -555,6 +586,7 @@ async function getQualityPhotoImage(req, res) {
   );
   const row = rows?.[0];
   if (!row) {
+    qlog('image:not_found_row', { qualityId, photoId, companyId, viewerEmployeeId });
     return res.status(404).end();
   }
 
@@ -562,17 +594,37 @@ async function getQualityPhotoImage(req, res) {
   if (vr.params.length) {
     const tr = String(row.technician_region || '').trim();
     if (tr !== vr.params[0]) {
+      qlog('image:region_mismatch', {
+        qualityId,
+        photoId,
+        viewerRegion: vr.params[0],
+        technicianRegion: tr
+      });
       return res.status(404).end();
     }
   }
 
   const abs = absolutePathForUploadPublicUrl(row.photo_url);
   if (!abs || !fs.existsSync(abs)) {
+    qlog('image:file_missing', {
+      qualityId,
+      photoId,
+      photoUrl: row.photo_url,
+      resolvedPath: abs,
+      exists: Boolean(abs && fs.existsSync(abs))
+    });
     return res.status(404).end();
   }
+  qlog('image:success', { qualityId, photoId, photoUrl: row.photo_url, resolvedPath: abs });
 
   return res.sendFile(abs, (err) => {
     if (err && !res.headersSent) {
+      qlog('image:sendfile_error', {
+        qualityId,
+        photoId,
+        message: err.message || 'unknown',
+        code: err.code || null
+      });
       res.status(404).end();
     }
   });
