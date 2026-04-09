@@ -16,6 +16,14 @@ function qlog(event, meta = {}) {
   console.log(`${ADMIN_QUALITY_LOG_PREFIX} ${event} ${JSON.stringify(meta)}`);
 }
 
+function normalizeRegion(value) {
+  return String(value || '').trim().toUpperCase();
+}
+
+function sameRegion(a, b) {
+  return normalizeRegion(a) === normalizeRegion(b);
+}
+
 let inspectorDecisionColumnEnsured = false;
 async function ensureInspectorDecisionColumn() {
   if (inspectorDecisionColumnEnsured) return;
@@ -436,7 +444,7 @@ async function getQualityDetailAdmin(req, res) {
   const vr = await viewerRegionParams(req.user.employeeId, companyId);
   if (vr.params.length) {
     const tr = String(q.technician_region || '').trim();
-    if (tr !== vr.params[0]) {
+    if (!sameRegion(tr, vr.params[0])) {
       qlog('detail:region_mismatch', {
         qualityId: q.id,
         requestedId: qualityId,
@@ -509,7 +517,7 @@ async function patchQualityReview(req, res) {
   );
   if (!qrows?.length) return res.status(404).json({ error: 'Quality not found' });
   const vr = await viewerRegionParams(req.user.employeeId, companyId);
-  if (vr.params.length && String(qrows[0].tech_region || '') !== vr.params[0]) {
+  if (vr.params.length && !sameRegion(String(qrows[0].tech_region || ''), vr.params[0])) {
     return res.status(404).json({ error: 'Quality not found' });
   }
 
@@ -593,7 +601,7 @@ async function getQualityPhotoImage(req, res) {
   const vr = await viewerRegionParams(req.user.employeeId, companyId);
   if (vr.params.length) {
     const tr = String(row.technician_region || '').trim();
-    if (tr !== vr.params[0]) {
+    if (!sameRegion(tr, vr.params[0])) {
       qlog('image:region_mismatch', {
         qualityId,
         photoId,
