@@ -390,7 +390,9 @@ async function getQualityDetailAdmin(req, res) {
   const { qualityId } = req.params;
   const companyId = req.user.companyId;
 
-  const [rows] = await pool.query(
+  // Accept both quality-id and photo-id to be resilient to stale/legacy clients.
+  let q = null;
+  const [rowsByQualityId] = await pool.query(
     `SELECT q.*, e.full_name AS technician_name, e.employee_code AS technician_code,
             e.region AS technician_region
      FROM qualities q
@@ -399,7 +401,20 @@ async function getQualityDetailAdmin(req, res) {
      LIMIT 1`,
     [qualityId, companyId]
   );
-  const q = rows?.[0];
+  q = rowsByQualityId?.[0] || null;
+  if (!q) {
+    const [rowsByPhotoId] = await pool.query(
+      `SELECT q.*, e.full_name AS technician_name, e.employee_code AS technician_code,
+              e.region AS technician_region
+       FROM quality_photos qp
+       JOIN qualities q ON q.id = qp.quality_id
+       JOIN employees e ON e.id = q.user_id
+       WHERE qp.id = ? AND q.company_id = ?
+       LIMIT 1`,
+      [qualityId, companyId]
+    );
+    q = rowsByPhotoId?.[0] || null;
+  }
   if (!q) return res.status(404).json({ error: 'Quality not found' });
 
   const vr = await viewerRegionParams(req.user.employeeId, companyId);
@@ -413,7 +428,7 @@ async function getQualityDetailAdmin(req, res) {
      FROM quality_photos
      WHERE quality_id = ?
      ORDER BY created_at ASC`,
-    [qualityId]
+    [q.id]
   );
 
   return res.json({
