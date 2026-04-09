@@ -3,6 +3,7 @@ const env = require('../config/env');
 
 // Business requirement: always show this sender address in outgoing notifications.
 const FORCED_FROM_ADDRESS = 'uasdt@vozsrl.net';
+const FORCED_FROM_DISPLAY = `Ponches Alerts <${FORCED_FROM_ADDRESS}>`;
 
 async function sendEmail({ to, subject, text, html = null, attachments = [], from = null }) {
   if (!env.mail.smtpHost || !env.mail.smtpUser || !env.mail.smtpPass) {
@@ -25,15 +26,28 @@ async function sendEmail({ to, subject, text, html = null, attachments = [], fro
   });
 
   try {
-    await transporter.sendMail({
+    const info = await transporter.sendMail({
       // Keep SMTP auth user for login, but force the visible From header.
-      from: FORCED_FROM_ADDRESS,
+      from: FORCED_FROM_DISPLAY,
       sender: FORCED_FROM_ADDRESS,
+      replyTo: FORCED_FROM_ADDRESS,
+      envelope: {
+        from: FORCED_FROM_ADDRESS,
+        to: Array.isArray(to) ? to : [to]
+      },
       to,
       subject,
       text,
       ...(html ? { html } : {}),
       ...(Array.isArray(attachments) && attachments.length > 0 ? { attachments } : {})
+    });
+    console.log('[mail] sent', {
+      to,
+      subject,
+      forcedFrom: FORCED_FROM_ADDRESS,
+      smtpUser: env.mail.smtpUser,
+      envelopeFrom: info?.envelope?.from || null,
+      messageId: info?.messageId || null
     });
   } catch (e) {
     const hint =
