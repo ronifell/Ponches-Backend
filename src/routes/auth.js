@@ -62,7 +62,8 @@ async function login(req, res) {
       companyId: employee.company_id,
       officeId: employee.office_id,
       geofenceKey: employee.geofence_key || null,
-      role: employee.role
+      role: employee.role,
+      employeeType: employee.employee_type || 'CENTRALIZED'
     },
     env.jwt.secret,
     { expiresIn: env.jwt.expiresIn }
