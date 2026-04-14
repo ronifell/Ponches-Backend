@@ -165,7 +165,7 @@ async function main() {
 
   // Bind all IPv4 interfaces so Android Emulator (10.0.2.2 → host) and LAN devices can connect.
   app.listen(serverPort, '0.0.0.0', () => {
-    console.log(`Ponches backend listening on http://0.0.0.0:${serverPort}`);
+    console.log(`Flupy Time backend listening on http://0.0.0.0:${serverPort}`);
   });
 
   // Run every hour (Santo Domingo checks inside jobs).

@@ -3,7 +3,7 @@ const env = require('../config/env');
 
 // Business requirement: always show this sender address in outgoing notifications.
 const FORCED_FROM_ADDRESS = 'uasdt@vozsrl.net';
-const FORCED_FROM_DISPLAY = `Ponches Alerts <${FORCED_FROM_ADDRESS}>`;
+const FORCED_FROM_DISPLAY = `Flupy Time Alerts <${FORCED_FROM_ADDRESS}>`;
 
 async function sendEmail({ to, subject, text, html = null, attachments = [], from = null }) {
   if (!env.mail.smtpHost || !env.mail.smtpUser || !env.mail.smtpPass) {

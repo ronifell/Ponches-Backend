@@ -196,7 +196,7 @@ module.exports = function registerGeofenceRoutes(app) {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Geofence Testing - Ponches</title>
+  <title>Geofence Testing - Flupy Time</title>
   <style>
     * { box-sizing: border-box; }
     body { font-family: system-ui, sans-serif; max-width: 700px; margin: 32px auto; padding: 0 16px; }

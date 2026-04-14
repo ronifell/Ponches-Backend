@@ -202,7 +202,7 @@ function invitePage(req, res) {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Complete Setup - Ponches</title>
+  <title>Complete Setup - Flupy Time</title>
   <style>
     * { box-sizing: border-box; }
     body { font-family: system-ui, sans-serif; max-width: 400px; margin: 40px auto; padding: 20px; }
@@ -260,7 +260,7 @@ function invitePage(req, res) {
         if (!r.ok) throw new Error(data.error || 'Failed');
         document.getElementById('form').style.display = 'none';
         const el = document.getElementById('result');
-        el.textContent = 'Setup complete! You can now log in with your employee code and password in the Ponches app.';
+        el.textContent = 'Setup complete! You can now log in with your employee code and password in Flupy Time.';
         el.className = 'success';
         el.style.display = 'block';
       } catch (err) {

@@ -155,15 +155,15 @@ async function adminLogin(req, res) {
 function buildCodeEmail({ code, employeeCode, fullName }) {
   const greetingName = fullName || employeeCode || 'there';
   return {
-    subject: 'Ponches password reset verification code',
+    subject: 'Flupy Time password reset verification code',
     text: `Hello ${greetingName},
 
-Use this verification code to reset your password in Ponches App: ${code}
+Use this verification code to reset your password in Flupy Time: ${code}
 
 This code expires in 10 minutes.
 If you did not request a reset, you can ignore this email.`,
     html: `<p>Hello ${greetingName},</p>
-<p>Use this verification code to reset your password in Ponches App:</p>
+<p>Use this verification code to reset your password in Flupy Time:</p>
 <p style="font-size: 22px; font-weight: 700; letter-spacing: 3px;">${code}</p>
 <p>This code expires in 10 minutes.</p>
 <p>If you did not request a reset, you can ignore this email.</p>`

@@ -60,7 +60,7 @@ module.exports = {
     smtpPort: Number(process.env.SMTP_PORT || 587),
     smtpUser: process.env.SMTP_USER || '',
     smtpPass: process.env.SMTP_PASS || '',
-    mailFrom: process.env.MAIL_FROM || 'Ponches App <no-reply@example.com>'
+    mailFrom: process.env.MAIL_FROM || 'Flupy Time <no-reply@example.com>'
   },
 
   fcm: {
