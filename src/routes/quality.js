@@ -157,11 +157,10 @@ async function notifyQualityOrderComplete({ companyId, qualityId, orderId, uploa
 module.exports = function registerQualityRoutes(app) {
   app.post('/quality', authRequired, async (req, res) => {
     await ensureQualitiesStbCountColumn();
-    const { orderId, workType, status = 'PENDING', stbCount: stbCountRaw } = req.body || {};
+    // Status is always PENDING until required photos exist and POST .../complete runs.
+    // Never trust a client-supplied status (would skip mandatory photo enforcement).
+    const { orderId, workType, stbCount: stbCountRaw } = req.body || {};
     if (!orderId || !workType) return res.status(400).json({ error: 'orderId and workType are required' });
-    if (!['PENDING', 'IN_REVIEW', 'APPROVED', 'REJECTED'].includes(status)) {
-      return res.status(400).json({ error: 'Invalid status' });
-    }
 
     const wt = normalizeWorkType(workType);
     const stbCount = clampStbCount(wt, stbCountRaw);
@@ -177,8 +176,8 @@ module.exports = function registerQualityRoutes(app) {
     await pool.query(
       `INSERT INTO qualities
       (id, company_id, user_id, order_id, work_type, status, stb_count)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [id, req.user.companyId, req.user.employeeId, String(orderId), wt, status, stbCount]
+      VALUES (?, ?, ?, ?, ?, 'PENDING', ?)`,
+      [id, req.user.companyId, req.user.employeeId, String(orderId), wt, stbCount]
     );
     return res.status(201).json({ id, ok: true, stbCount, requiredPhotoTypes: slots });
   });
@@ -193,12 +192,17 @@ module.exports = function registerQualityRoutes(app) {
     if (!req.file) return res.status(400).json({ error: 'Missing photo file' });
 
     const [qualityRows] = await pool.query(
-      'SELECT id, company_id, user_id, order_id, work_type, stb_count FROM qualities WHERE id = ? LIMIT 1',
+      'SELECT id, company_id, user_id, order_id, work_type, stb_count, status FROM qualities WHERE id = ? LIMIT 1',
       [qualityId]
     );
     const quality = qualityRows?.[0];
     if (!quality) return res.status(404).json({ error: 'Quality not found' });
     if (quality.company_id !== req.user.companyId) return res.status(403).json({ error: 'Forbidden' });
+    if (String(quality.status || '').toUpperCase() !== 'PENDING') {
+      return res.status(400).json({
+        error: 'Cannot add photos: this quality session was already submitted or is under review'
+      });
+    }
 
     const feOn =
       feRaw === true ||
@@ -254,17 +258,35 @@ module.exports = function registerQualityRoutes(app) {
       return res.status(400).json({ error: 'No required photo catalog found for this work type' });
     }
 
-    const [uploadedRows] = await pool.query(
-      `SELECT DISTINCT photo_type
+    // Mandatory photos: only rows with a stored image path count toward completion.
+    const [validCountRows] = await pool.query(
+      `SELECT COUNT(*) AS n
        FROM quality_photos
-       WHERE quality_id = ?`,
+       WHERE quality_id = ?
+         AND COALESCE(TRIM(photo_url), '') <> ''`,
       [qualityId]
     );
-    const uploadedSet = new Set((uploadedRows || []).map((r) => String(r.photo_type || '').trim().toUpperCase()));
+    const validPhotoCount = Number(validCountRows?.[0]?.n ?? 0);
+    if (validPhotoCount < 1) {
+      return res.status(400).json({
+        error: 'Cannot complete order: at least one photo is required'
+      });
+    }
+
+    const [uploadedRows] = await pool.query(
+      `SELECT DISTINCT UPPER(TRIM(photo_type)) AS photo_type
+       FROM quality_photos
+       WHERE quality_id = ?
+         AND COALESCE(TRIM(photo_url), '') <> ''`,
+      [qualityId]
+    );
+    const uploadedSet = new Set(
+      (uploadedRows || []).map((r) => String(r.photo_type || '').trim()).filter(Boolean)
+    );
     const missing = required.filter((slot) => !uploadedSet.has(String(slot).trim().toUpperCase()));
     if (missing.length > 0) {
       return res.status(400).json({
-        error: 'Missing required photos before completing the order',
+        error: 'Cannot complete order until every required photo has been uploaded',
         missingPhotoTypes: missing
       });
     }
