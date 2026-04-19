@@ -9,6 +9,7 @@ const { authRequired } = require('../middleware/auth');
 const { parseOccuredAt, toWorkdayDate } = require('../utils/timezone');
 const { haversineDistanceMeters } = require('../utils/distance');
 const { sendEmail, sendFcm } = require('../services/notify');
+const { getAssignedSupervisorContacts } = require('../services/supervisorRecipients');
 
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -62,21 +63,6 @@ async function getEmployeeNotificationDetails(employeeId) {
     [employeeId]
   );
   return rows?.[0] || null;
-}
-
-async function getSupervisorsForOffice(officeId) {
-  const [rows] = await pool.query(
-    'SELECT email, fcm_token FROM employees WHERE office_id = ? AND role = ? AND email IS NOT NULL',
-    [officeId, 'SUPERVISOR']
-  );
-  const seenEmails = new Set();
-  return (rows || []).filter((row) => {
-    const email = String(row?.email || '').trim().toLowerCase();
-    if (!email) return false;
-    if (seenEmails.has(email)) return false;
-    seenEmails.add(email);
-    return true;
-  });
 }
 
 // Notifications can be duplicated if the mobile app retries the same upload (or submits twice).
@@ -273,7 +259,6 @@ module.exports = function registerPhotoRoutes(app) {
       console.log('POST /photos received', req.file ? `(file: ${req.file.originalname || req.file.filename})` : '(no file)');
       const employeeId = req.user.employeeId;
       const companyId = req.user.companyId;
-      const officeId = req.user.officeId;
       const role = req.user.role;
 
       if (role === 'SUPERVISOR') {
@@ -424,7 +409,7 @@ module.exports = function registerPhotoRoutes(app) {
       // Email/FCM must not fail the upload if SMTP or push is unreachable (e.g. ETIMEDOUT to internal relay).
       try {
         const employeeDetails = await getEmployeeNotificationDetails(employeeId);
-        const supervisors = await getSupervisorsForOffice(officeId);
+        const supervisors = await getAssignedSupervisorContacts(employeeId);
         const supervisorSubject = `Employee photo uploaded (${normalizedOrderNumberStr})`;
         const supervisorText = buildSupervisorUploadEmailText({
           employeeDetails,

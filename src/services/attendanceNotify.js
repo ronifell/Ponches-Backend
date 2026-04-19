@@ -1,5 +1,6 @@
 const { pool } = require('../db/pool');
 const { sendEmail, sendFcm } = require('./notify');
+const { getAssignedSupervisorContacts } = require('./supervisorRecipients');
 const { haversineDistanceMeters } = require('../utils/distance');
 const { ZONE } = require('../utils/timezone');
 
@@ -18,14 +19,6 @@ async function computeLateMinutes({ officeId, occurredAtDt }) {
   if (occurredAtDt <= deadline) return 0;
   const diffMinutes = occurredAtDt.diff(deadline, 'minutes').minutes;
   return Math.ceil(diffMinutes);
-}
-
-async function getSupervisorsForOffice(officeId) {
-  const [rows] = await pool.query(
-    'SELECT email, fcm_token FROM employees WHERE office_id = ? AND role = ? AND email IS NOT NULL',
-    [officeId, 'SUPERVISOR']
-  );
-  return rows || [];
 }
 
 async function getEmployeeContacts(employeeId) {
@@ -220,7 +213,7 @@ async function notifyLateArrivalIfNeeded({ employeeId, officeId, occurredAtDt, l
 
   const ctx = await getOfficeGeofenceContext(officeId, geofenceKey);
   const employee = await getEmployeeContacts(employeeId);
-  const supervisors = await getSupervisorsForOffice(officeId);
+  const supervisors = await getAssignedSupervisorContacts(employeeId);
 
   const hhmm = occurredAtDt.setZone(ZONE).toFormat('HH:mm');
   const html = buildLateArrivalSpanishHtml({
@@ -275,7 +268,7 @@ async function notifyLateArrivalIfNeeded({ employeeId, officeId, occurredAtDt, l
  */
 async function notifyWorkdayAutoClosed({ employeeId, officeId, occurredAtDt }) {
   const employee = await getEmployeeContacts(employeeId);
-  const supervisors = await getSupervisorsForOffice(officeId);
+  const supervisors = await getAssignedSupervisorContacts(employeeId);
   const [ctxRows] = await pool.query(
     `SELECT o.name AS office_name FROM offices o WHERE o.id = ? LIMIT 1`,
     [officeId]

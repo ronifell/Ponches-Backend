@@ -25,10 +25,14 @@ function trimEmail(value) {
 /**
  * Recipients for attendance alerts:
  * - company ADMINs with a profile email (updated via PUT /employees)
- * - office SUPERVISORs with an email (office-scoped, same email field as admin)
+ * - the acting employee's assigned SUPERVISOR (`supervisor_id`) when they have an email
  * If there are no ADMINs with email, fall back to SUPER_MANAGER_EMPLOYEE_CODE.
  */
-async function resolveAttendanceNotifyRecipients(companyId, officeId, { omitSupervisors = false } = {}) {
+async function resolveAttendanceNotifyRecipients(
+  companyId,
+  _officeId,
+  { omitSupervisors = false, employeeId = null } = {}
+) {
   const [adminRows] = await pool.query(
     `SELECT id, email, full_name FROM employees WHERE company_id = ? AND role = 'ADMIN'`,
     [companyId]
@@ -58,20 +62,21 @@ async function resolveAttendanceNotifyRecipients(companyId, officeId, { omitSupe
     }
   }
 
-  // Office-scoped supervisor emails (same admin-style attendance email), unless omitted (e.g. auto-close uses a dedicated supervisor email).
-  const supervisorRecipients =
-    omitSupervisors || !officeId
-      ? []
-      : (
-          await pool.query(
-            `SELECT id, email, full_name
-             FROM employees
-             WHERE office_id = ? AND role = 'SUPERVISOR' AND email IS NOT NULL`,
-            [officeId]
-          )
-        )[0]
-          .map((r) => ({ ...r, email: trimEmail(r.email) }))
-          .filter((r) => r.email);
+  // Assigned supervisor only (direct reports), unless omitted (e.g. auto-close uses attendanceNotify supervisor email).
+  let supervisorRecipients = [];
+  if (!omitSupervisors && employeeId) {
+    const [supRows] = await pool.query(
+      `SELECT s.id, s.email, s.full_name
+       FROM employees e
+       INNER JOIN employees s ON s.id = e.supervisor_id AND s.company_id = e.company_id
+       WHERE e.id = ? AND e.company_id = ?
+         AND s.role = 'SUPERVISOR' AND s.email IS NOT NULL`,
+      [employeeId, companyId]
+    );
+    supervisorRecipients = (supRows || [])
+      .map((r) => ({ ...r, email: trimEmail(r.email) }))
+      .filter((r) => r.email);
+  }
 
   // De-dup recipients by employee id.
   const uniq = new Map();
@@ -98,7 +103,8 @@ async function notifySuperManagerAttendanceRecord({
   omitSupervisorsForEmail = false
 }) {
   const recipients = await resolveAttendanceNotifyRecipients(companyId, officeId, {
-    omitSupervisors: omitSupervisorsForEmail
+    omitSupervisors: omitSupervisorsForEmail,
+    employeeId
   });
   const shouldSendCompanyCopy = eventType === 'WORKDAY_CLOSED';
 
