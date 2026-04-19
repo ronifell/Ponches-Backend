@@ -4,6 +4,8 @@ const { parseOccuredAt, toWorkdayDate } = require('../utils/timezone');
 const { enforceEmployeeManualWorkdayClose } = require('../utils/workdayClosePolicy');
 const { notifySuperManagerAttendanceRecord } = require('../services/superManagerAttendanceNotify');
 const { notifyLateArrivalIfNeeded, notifyWorkdayAutoClosed } = require('../services/attendanceNotify');
+const { recordWorkdayClosureHandledForAutoJob } = require('../utils/workdayClosureNotified');
+const { resolveWorkdayDateForClose } = require('../utils/workdayDateResolve');
 
 async function isWorkdayAlreadyClosed(employeeId, workdayDate) {
   const [rows] = await pool.query(
@@ -80,7 +82,10 @@ module.exports = function registerAttendanceRoutes(app) {
           : null;
 
     const occurredAtDt = parseOccuredAt(occurredAt);
-    const workday_date = toWorkdayDate(occurredAtDt);
+    const workday_date =
+      eventType === 'WORKDAY_CLOSED'
+        ? await resolveWorkdayDateForClose(employeeId, occurredAtDt)
+        : toWorkdayDate(occurredAtDt);
 
     if (eventType === 'WORKDAY_CLOSED' && source !== 'AUTO') {
       const deny = await enforceEmployeeManualWorkdayClose({
@@ -113,6 +118,12 @@ module.exports = function registerAttendanceRoutes(app) {
         resolvedGeofenceKey
       ]
     );
+
+    if (eventType === 'WORKDAY_CLOSED' && source !== 'AUTO') {
+      await recordWorkdayClosureHandledForAutoJob(employeeId, workday_date).catch((e) =>
+        console.warn('workday_closure_notified insert failed:', e.message || e)
+      );
+    }
 
     const occurredAtFormatted = occurredAtDt.toFormat('yyyy-LL-dd HH:mm');
     notifySuperManagerAttendanceRecord({

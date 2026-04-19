@@ -4,6 +4,8 @@ const { parseOccuredAt, toWorkdayDate } = require('../utils/timezone');
 const { enforceEmployeeManualWorkdayClose } = require('../utils/workdayClosePolicy');
 const { notifySuperManagerAttendanceRecord } = require('../services/superManagerAttendanceNotify');
 const { notifyLateArrivalIfNeeded } = require('../services/attendanceNotify');
+const { recordWorkdayClosureHandledForAutoJob } = require('../utils/workdayClosureNotified');
+const { resolveWorkdayDateForClose } = require('../utils/workdayDateResolve');
 
 function mapPunchToAttendanceEvent(punchType) {
   if (punchType === 'ENTRY') return 'CHECK_IN';
@@ -129,7 +131,10 @@ module.exports = function registerPunchRoutes(app) {
     }
 
     const occurredAtDt = parseOccuredAt(occurredAt);
-    const workdayDate = toWorkdayDate(occurredAtDt);
+    let workdayDate = toWorkdayDate(occurredAtDt);
+    if (Boolean(endWorkday)) {
+      workdayDate = await resolveWorkdayDateForClose(employeeId, occurredAtDt);
+    }
 
     if (Boolean(endWorkday)) {
       const deny = await enforceEmployeeManualWorkdayClose({
@@ -183,6 +188,12 @@ module.exports = function registerPunchRoutes(app) {
         workdayDate
       ]
     );
+
+    if (punchType === 'EXIT') {
+      await recordWorkdayClosureHandledForAutoJob(employeeId, workdayDate).catch((e) =>
+        console.warn('workday_closure_notified insert failed:', e.message || e)
+      );
+    }
 
     const eventType = mapPunchToAttendanceEvent(punchType);
     const manualClose = punchType === 'EXIT';

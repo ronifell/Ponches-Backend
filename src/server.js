@@ -1,6 +1,7 @@
 const { createApp } = require('./app');
 const cron = require('node-cron');
-const { nowSantoDomingo } = require('./utils/timezone');
+const { nowSantoDomingo, drDayStartEndSqlStrings } = require('./utils/timezone');
+const { ensureWorkdayClosureNotifiedTable } = require('./utils/workdayClosureNotified');
 const { pool } = require('./db/pool');
 const { sendFcm } = require('./services/notify');
 const { notifySuperManagerAttendanceRecord } = require('./services/superManagerAttendanceNotify');
@@ -77,9 +78,14 @@ async function workdayAutoClosureJob() {
   const now = nowSantoDomingo();
   if (now.hour < 20) return; // only after 8pm
 
-  const workdayDate = now.toISODate(); // in Santo Domingo zone
+  await ensureWorkdayClosureNotifiedTable();
 
-  // Find employees that have activity but no WORKDAY_CLOSED yet, and haven't been notified.
+  const workdayDate = now.toISODate(); // in Santo Domingo zone
+  const { startSql, endExclusiveSql } = drDayStartEndSqlStrings(workdayDate);
+
+  // Employees with open activity for this calendar day who still need an AUTO close.
+  // Treat as closed if WORKDAY_CLOSED exists for that workday_date OR occurred_at falls on this DR day
+  // (covers manual close rows whose workday_date column disagrees with activity rows).
   const [rows] = await pool.query(
     `SELECT a.employee_id, a.office_id
      FROM attendance_events a
@@ -89,8 +95,11 @@ async function workdayAutoClosureJob() {
          SELECT 1
          FROM attendance_events b
          WHERE b.employee_id = a.employee_id
-           AND b.workday_date = a.workday_date
            AND b.event_type = 'WORKDAY_CLOSED'
+           AND (
+             b.workday_date = a.workday_date
+             OR (b.occurred_at >= ? AND b.occurred_at < ?)
+           )
        )
        AND NOT EXISTS (
          SELECT 1
@@ -99,14 +108,17 @@ async function workdayAutoClosureJob() {
            AND w.workday_date = a.workday_date
        )
      GROUP BY a.employee_id, a.office_id`,
-    [workdayDate]
+    [workdayDate, startSql, endExclusiveSql]
   );
 
   if (!rows?.length) return;
 
   const occurredAtDt = now.set({ hour: 20, minute: 0, second: 0, millisecond: 0 });
 
+  const seenEmployee = new Set();
   for (const r of rows) {
+    if (seenEmployee.has(r.employee_id)) continue;
+    seenEmployee.add(r.employee_id);
     // Insert the closure event and mark as notified to avoid duplicates.
     await pool.query(
       `INSERT INTO attendance_events
@@ -119,7 +131,7 @@ async function workdayAutoClosureJob() {
     );
 
     await pool.query(
-      `INSERT INTO workday_closure_notified (employee_id, workday_date) VALUES (?, ?)`,
+      `INSERT IGNORE INTO workday_closure_notified (employee_id, workday_date) VALUES (?, ?)`,
       [r.employee_id, workdayDate]
     );
 

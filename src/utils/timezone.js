@@ -25,5 +25,15 @@ function parseOccuredAt(occurredAt) {
   return bestEffort.isValid ? bestEffort : nowSantoDomingo();
 }
 
-module.exports = { ZONE, nowSantoDomingo, toWorkdayDate, parseOccuredAt };
+/** Naive DATETIME bounds for `occurred_at` (stored as DR wall time) for one calendar day in DR. */
+function drDayStartEndSqlStrings(isoDateStr) {
+  const start = DateTime.fromISO(String(isoDateStr), { zone: ZONE }).startOf('day');
+  const endExclusive = start.plus({ days: 1 });
+  return {
+    startSql: start.toFormat('yyyy-LL-dd HH:mm:ss'),
+    endExclusiveSql: endExclusive.toFormat('yyyy-LL-dd HH:mm:ss')
+  };
+}
+
+module.exports = { ZONE, nowSantoDomingo, toWorkdayDate, parseOccuredAt, drDayStartEndSqlStrings };
 
