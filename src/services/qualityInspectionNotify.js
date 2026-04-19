@@ -18,13 +18,20 @@ function offerToken(set, raw) {
  */
 async function notifyQualityInspectionError({ companyId, qualityId, technicianId, orderId }) {
   const [errPhotos] = await pool.query(
-    `SELECT photo_type FROM quality_photos
+    `SELECT photo_type, inspector_comment FROM quality_photos
      WHERE quality_id = ? AND inspector_decision = 'ERROR'
      ORDER BY photo_type`,
     [qualityId]
   );
-  const names = (errPhotos || []).map((p) => String(p.photo_type || '').trim()).filter(Boolean);
-  if (names.length === 0) return;
+  const lines = (errPhotos || [])
+    .map((p) => {
+      const slot = String(p.photo_type || '').trim();
+      if (!slot) return '';
+      const note = String(p.inspector_comment || '').trim();
+      return note ? `${slot}: ${note}` : slot;
+    })
+    .filter(Boolean);
+  if (lines.length === 0) return;
 
   const [techRows] = await pool.query(
     `SELECT email, fcm_token, full_name, employee_code, supervisor_id
@@ -51,13 +58,14 @@ async function notifyQualityInspectionError({ companyId, qualityId, technicianId
 
   const orderStr = String(orderId);
   const subject = `Orden ${orderStr} — error en fotos`;
-  const photoList = names.join(', ');
+  const detailBlock = lines.join('\n');
   const body =
     `Se marcaron errores en fotos de la orden ${orderStr}.\n` +
-    `Fotos con error: ${photoList}\n` +
+    `Detalle:\n${detailBlock}\n` +
     `Técnico: ${String(t?.full_name || '').trim()} (${String(t?.employee_code || '').trim() || technicianId})\n`;
 
-  const pushBody = `Orden ${orderStr} · ${photoList}`;
+  const pushBody =
+    detailBlock.length > 180 ? `Orden ${orderStr} · ver correo / app` : `Orden ${orderStr} · ${detailBlock}`;
 
   const emailByLower = new Map();
   const fcmTokens = new Set();

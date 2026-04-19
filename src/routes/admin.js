@@ -456,7 +456,8 @@ async function getQualityDetailAdmin(req, res) {
   }
 
   const [photos] = await pool.query(
-    `SELECT id, photo_type, photo_url, fe, fe_comment, COALESCE(inspector_decision, 'NONE') AS inspector_decision, created_at
+    `SELECT id, photo_type, photo_url, fe, fe_comment, COALESCE(inspector_decision, 'NONE') AS inspector_decision,
+            inspector_comment, created_at
      FROM quality_photos
      WHERE quality_id = ?
      ORDER BY created_at ASC`,
@@ -487,6 +488,7 @@ async function getQualityDetailAdmin(req, res) {
       fe: Boolean(p.fe),
       feComment: p.fe_comment,
       inspectorDecision: String(p.inspector_decision || 'NONE').toUpperCase(),
+      inspectorComment: p.inspector_comment != null ? String(p.inspector_comment) : null,
       createdAt: p.created_at
     }))
   });
@@ -497,7 +499,7 @@ async function patchQualityReview(req, res) {
   await ensureQualityPhotosInspectorDecisionColumn();
   await ensureEmployeeRegionColumns();
   const { qualityId } = req.params;
-  const { photoId, decision } = req.body || {};
+  const { photoId, decision, comment: commentRaw } = req.body || {};
   const companyId = req.user.companyId;
 
   if (!photoId || typeof photoId !== 'string') {
@@ -505,6 +507,13 @@ async function patchQualityReview(req, res) {
   }
   if (!['FE', 'ERROR', 'OK'].includes(decision)) {
     return res.status(400).json({ error: 'decision must be FE, ERROR, or OK' });
+  }
+
+  const commentTrim = String(commentRaw ?? '').trim();
+  const inspectorComment =
+    decision === 'OK' ? null : commentTrim.slice(0, 4000);
+  if ((decision === 'FE' || decision === 'ERROR') && !inspectorComment) {
+    return res.status(400).json({ error: 'comment is required when marking FE or ERROR' });
   }
 
   const [qrows] = await pool.query(
@@ -528,8 +537,8 @@ async function patchQualityReview(req, res) {
   if (!prows?.length) return res.status(404).json({ error: 'Photo not found' });
 
   await pool.query(
-    `UPDATE quality_photos SET inspector_decision = ? WHERE id = ? AND quality_id = ?`,
-    [decision, photoId, qualityId]
+    `UPDATE quality_photos SET inspector_decision = ?, inspector_comment = ? WHERE id = ? AND quality_id = ?`,
+    [decision, inspectorComment, photoId, qualityId]
   );
 
   await recomputeQualityFromPhotos(qualityId, companyId);

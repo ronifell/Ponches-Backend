@@ -19,6 +19,11 @@ async function ensureQualityPhotosInspectorDecisionColumn() {
      WHERE q.inspector_decision IN ('OK', 'FE', 'ERROR')
        AND qp.inspector_decision = 'NONE'`
   );
+  try {
+    await pool.query(`ALTER TABLE quality_photos ADD COLUMN inspector_comment TEXT NULL`);
+  } catch (e) {
+    if (e.code !== 'ER_DUP_FIELDNAME') throw e;
+  }
   photoInspectorDecisionColumnEnsured = true;
 }
 
