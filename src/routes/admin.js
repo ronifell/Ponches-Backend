@@ -632,9 +632,9 @@ async function getQualityPhotoImage(req, res) {
     });
     return res.status(404).end();
   }
-  qlog('image:success', { qualityId, photoId, photoUrl: row.photo_url, resolvedPath: abs });
 
-  return res.sendFile(abs, (err) => {
+  // Browser + CDN-friendly private cache; bytes are immutable per photo id/path.
+  return res.sendFile(abs, { maxAge: 86400000 }, (err) => {
     if (err && !res.headersSent) {
       qlog('image:sendfile_error', {
         qualityId,
