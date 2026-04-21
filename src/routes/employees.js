@@ -313,14 +313,8 @@ async function updateEmployee(req, res) {
       updates.push('region = ?');
       params.push(rv || null);
     } else {
-      const vrScope = await viewerRegionParams(req.user.employeeId, req.user.companyId);
-      if (vrScope.params.length) {
-        updates.push('region = ?');
-        params.push(vrScope.params[0]);
-      } else {
-        updates.push('region = ?');
-        params.push(rv || null);
-      }
+      updates.push('region = ?');
+      params.push(rv || null);
     }
   }
   if (password) {
