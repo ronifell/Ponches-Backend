@@ -504,7 +504,11 @@ module.exports = function registerPhotoRoutes(app) {
           }
         } else if (validation_result === 'APPROVED') {
           const employee = await getEmployeeContacts(employeeId);
-          if (employee && (employee.email || employee.fcm_token)) {
+          const supervisorEmails = supervisors
+            .map((s) => String(s.email || '').trim())
+            .filter((v) => v && v.includes('@'));
+          const emailTargets = [...new Set([String(employee?.email || '').trim(), ...supervisorEmails].filter(Boolean))];
+          if ((employee && employee.fcm_token) || emailTargets.length > 0) {
             const shouldNotify = await tryAcquirePhotoNotificationGuard({
               companyId,
               employeeId,
@@ -517,10 +521,6 @@ module.exports = function registerPhotoRoutes(app) {
               try {
                 const subject = `Photo approved (${normalizedOrderNumberStr})`;
                 const text = `Your photo for order ${normalizedOrderNumberStr} was validated successfully.`;
-                const supervisorEmails = supervisors
-                  .map((s) => String(s.email || '').trim())
-                  .filter((v) => v && v.includes('@'));
-                const emailTargets = [...new Set([String(employee?.email || '').trim(), ...supervisorEmails].filter(Boolean))];
                 await Promise.all([
                   ...emailTargets.map((to) =>
                     sendEmail({
