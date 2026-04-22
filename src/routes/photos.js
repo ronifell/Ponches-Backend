@@ -65,6 +65,15 @@ async function getEmployeeNotificationDetails(employeeId) {
   return rows?.[0] || null;
 }
 
+async function getCompanyNotificationEmail(companyId) {
+  const [rows] = await pool.query(
+    'SELECT notification_email FROM companies WHERE id = ? LIMIT 1',
+    [companyId]
+  );
+  const value = String(rows?.[0]?.notification_email || '').trim();
+  return value || null;
+}
+
 // Notifications can be duplicated if the mobile app retries the same upload (or submits twice).
 // To make notification sending concurrency-safe, we use a DB guard table with a unique key.
 let photoNotificationGuardsEnsured = false;
@@ -408,6 +417,7 @@ module.exports = function registerPhotoRoutes(app) {
 
       // Email/FCM must not fail the upload if SMTP or push is unreachable (e.g. ETIMEDOUT to internal relay).
       try {
+        const companyFrom = await getCompanyNotificationEmail(companyId);
         const employeeDetails = await getEmployeeNotificationDetails(employeeId);
         const supervisors = await getAssignedSupervisorContacts(employeeId);
         const supervisorSubject = `Employee photo uploaded (${normalizedOrderNumberStr})`;
@@ -431,6 +441,7 @@ module.exports = function registerPhotoRoutes(app) {
                 to: s.email,
                 subject: supervisorSubject,
                 text: supervisorText,
+                ...(companyFrom ? { from: companyFrom } : {}),
                 html: buildSupervisorUploadEmailHtml({ supervisorText, imageCid }),
                 attachments: [
                   {
@@ -461,9 +472,20 @@ module.exports = function registerPhotoRoutes(app) {
               const text = `A photo for order ${normalizedOrderNumberStr} was rejected (distance=${validation_distance_meters ?? 'n/a'}m).`;
 
               const employee = await getEmployeeContacts(employeeId);
-              if (employee && (employee.email || employee.fcm_token)) {
+              const supervisorEmails = supervisors
+                .map((s) => String(s.email || '').trim())
+                .filter((v) => v && v.includes('@'));
+              const emailTargets = [...new Set([String(employee?.email || '').trim(), ...supervisorEmails].filter(Boolean))];
+              if ((employee && employee.fcm_token) || emailTargets.length > 0) {
                 await Promise.all([
-                  employee.email ? sendEmail({ to: employee.email, subject, text }) : Promise.resolve(),
+                  ...emailTargets.map((to) =>
+                    sendEmail({
+                      to,
+                      subject,
+                      text,
+                      ...(companyFrom ? { from: companyFrom } : {})
+                    })
+                  ),
                   employee.fcm_token
                     ? sendFcm({ toToken: employee.fcm_token, title: 'Photo validation failed', body: text })
                     : Promise.resolve()
@@ -495,8 +517,19 @@ module.exports = function registerPhotoRoutes(app) {
               try {
                 const subject = `Photo approved (${normalizedOrderNumberStr})`;
                 const text = `Your photo for order ${normalizedOrderNumberStr} was validated successfully.`;
+                const supervisorEmails = supervisors
+                  .map((s) => String(s.email || '').trim())
+                  .filter((v) => v && v.includes('@'));
+                const emailTargets = [...new Set([String(employee?.email || '').trim(), ...supervisorEmails].filter(Boolean))];
                 await Promise.all([
-                  employee.email ? sendEmail({ to: employee.email, subject, text }) : Promise.resolve(),
+                  ...emailTargets.map((to) =>
+                    sendEmail({
+                      to,
+                      subject,
+                      text,
+                      ...(companyFrom ? { from: companyFrom } : {})
+                    })
+                  ),
                   employee.fcm_token
                     ? sendFcm({ toToken: employee.fcm_token, title: 'Photo approved', body: text })
                     : Promise.resolve()

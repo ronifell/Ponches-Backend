@@ -32,8 +32,8 @@ function dthCoreSlots() {
     slot('DTH_DISH_BASE', 'Base de la parabólica', SOURCE_CAMERA),
     slot('DTH_COAX_EXT', 'Cable coaxial exterior', SOURCE_CAMERA),
     slot('DTH_COAX_INT', 'Cable coaxial interior', SOURCE_CAMERA),
-    slot('DTH_TP1', 'TP 1', SOURCE_CAMERA),
-    slot('DTH_TP2', 'TP 2', SOURCE_CAMERA)
+    slot('DTH_TP1', 'TP11130', SOURCE_CAMERA),
+    slot('DTH_TP2', 'TP11050', SOURCE_CAMERA)
   ];
 }
 

@@ -103,17 +103,20 @@ async function notifyQualityOrderComplete({ companyId, qualityId, orderId, uploa
   const [adminRows] = await pool.query(adminSql, adminParams);
 
   let supervisorToken = null;
+  let supervisorEmail = null;
   if (uploader?.supervisor_id) {
     const [sup] = await pool.query(
-      `SELECT fcm_token FROM employees WHERE id = ? AND company_id = ? LIMIT 1`,
+      `SELECT email, fcm_token FROM employees WHERE id = ? AND company_id = ? LIMIT 1`,
       [uploader.supervisor_id, companyId]
     );
+    supervisorEmail = trimEmail(sup?.[0]?.email);
     supervisorToken = String(sup?.[0]?.fcm_token || '').trim() || null;
   } else {
     const [sup] = await pool.query(
-      `SELECT fcm_token FROM employees WHERE company_id = ? AND role = 'SUPERVISOR' LIMIT 1`,
+      `SELECT email, fcm_token FROM employees WHERE company_id = ? AND role = 'SUPERVISOR' LIMIT 1`,
       [companyId]
     );
+    supervisorEmail = trimEmail(sup?.[0]?.email);
     supervisorToken = String(sup?.[0]?.fcm_token || '').trim() || null;
   }
 
@@ -132,9 +135,10 @@ async function notifyQualityOrderComplete({ companyId, qualityId, orderId, uploa
     `ID calidad: ${qualityId}`;
 
   const adminEmails = [...new Set((adminRows || []).map((r) => trimEmail(r.email)).filter(Boolean))];
+  const emailRecipients = [...new Set([...adminEmails, ...(supervisorEmail ? [supervisorEmail] : [])])];
 
   await Promise.all([
-    ...adminEmails.map((to) =>
+    ...emailRecipients.map((to) =>
       sendEmail({
         to,
         subject,

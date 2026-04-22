@@ -31,7 +31,7 @@ async function notifyQualityInspectionError({ companyId, qualityId, technicianId
       return note ? `${slot}: ${note}` : slot;
     })
     .filter(Boolean);
-  if (lines.length === 0) return;
+  const detailBlock = lines.length > 0 ? lines.join('\n') : 'Revisar imagen(es) marcadas con ERROR.';
 
   const [techRows] = await pool.query(
     `SELECT email, fcm_token, full_name, employee_code, supervisor_id
@@ -44,6 +44,11 @@ async function notifyQualityInspectionError({ companyId, qualityId, technicianId
     `SELECT email, fcm_token FROM employees WHERE company_id = ? AND role = 'ADMIN'`,
     [companyId]
   );
+  const [coRows] = await pool.query(
+    'SELECT notification_email FROM companies WHERE id = ? LIMIT 1',
+    [companyId]
+  );
+  const companyFrom = String(coRows?.[0]?.notification_email || '').trim() || null;
 
   let supEmail = null;
   let supToken = null;
@@ -58,7 +63,6 @@ async function notifyQualityInspectionError({ companyId, qualityId, technicianId
 
   const orderStr = String(orderId);
   const subject = `Orden ${orderStr} — error en fotos`;
-  const detailBlock = lines.join('\n');
   const body =
     `Se marcaron errores en fotos de la orden ${orderStr}.\n` +
     `Detalle:\n${detailBlock}\n` +
@@ -81,7 +85,7 @@ async function notifyQualityInspectionError({ companyId, qualityId, technicianId
   }
 
   await Promise.all([
-    ...[...emailByLower.values()].map((to) => sendEmail({ to, subject, text: body })),
+    ...[...emailByLower.values()].map((to) => sendEmail({ to, subject, text: body, from: companyFrom })),
     ...[...fcmTokens].map((toToken) =>
       sendFcm({
         toToken,

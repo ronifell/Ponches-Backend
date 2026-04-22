@@ -1,9 +1,11 @@
 const nodemailer = require('nodemailer');
 const env = require('../config/env');
 
-// Business requirement: always show this sender address in outgoing notifications.
-const FORCED_FROM_ADDRESS = 'uasdt@vozsrl.net';
-const FORCED_FROM_DISPLAY = `Flupy Time Alerts <${FORCED_FROM_ADDRESS}>`;
+function trimEmail(value) {
+  if (value == null) return null;
+  const s = String(value).trim();
+  return s.length > 0 ? s : null;
+}
 
 async function sendEmail({ to, subject, text, html = null, attachments = [], from = null }) {
   if (!env.mail.smtpHost || !env.mail.smtpUser || !env.mail.smtpPass) {
@@ -26,13 +28,18 @@ async function sendEmail({ to, subject, text, html = null, attachments = [], fro
   });
 
   try {
+    const sender =
+      trimEmail(from) ||
+      trimEmail(env.mail.mailFrom) ||
+      trimEmail(env.mail.smtpUser) ||
+      'no-reply@example.com';
     const info = await transporter.sendMail({
-      // Keep SMTP auth user for login, but force the visible From header.
-      from: FORCED_FROM_DISPLAY,
-      sender: FORCED_FROM_ADDRESS,
-      replyTo: FORCED_FROM_ADDRESS,
+      // Keep SMTP auth user for login, while allowing per-company sender when provided.
+      from: sender,
+      sender,
+      replyTo: sender,
       envelope: {
-        from: FORCED_FROM_ADDRESS,
+        from: sender,
         to: Array.isArray(to) ? to : [to]
       },
       to,
@@ -44,7 +51,7 @@ async function sendEmail({ to, subject, text, html = null, attachments = [], fro
     console.log('[mail] sent', {
       to,
       subject,
-      forcedFrom: FORCED_FROM_ADDRESS,
+      from: sender,
       smtpUser: env.mail.smtpUser,
       envelopeFrom: info?.envelope?.from || null,
       messageId: info?.messageId || null
