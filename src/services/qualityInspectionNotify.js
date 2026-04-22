@@ -68,8 +68,10 @@ async function notifyQualityInspectionError({ companyId, qualityId, technicianId
     `Detalle:\n${detailBlock}\n` +
     `Técnico: ${String(t?.full_name || '').trim()} (${String(t?.employee_code || '').trim() || technicianId})\n`;
 
-  const pushBody =
-    detailBlock.length > 180 ? `Orden ${orderStr} · ver correo / app` : `Orden ${orderStr} · ${detailBlock}`;
+  const compactDetail = detailBlock.replace(/\s+/g, ' ').trim();
+  const clippedDetail =
+    compactDetail.length > 160 ? `${compactDetail.slice(0, 157)}...` : compactDetail;
+  const pushBody = `Orden ${orderStr} · ${clippedDetail}`;
 
   const emailByLower = new Map();
   const fcmTokens = new Set();
