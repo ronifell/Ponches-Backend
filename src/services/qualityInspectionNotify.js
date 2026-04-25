@@ -86,7 +86,7 @@ async function notifyQualityInspectionError({ companyId, qualityId, technicianId
     offerToken(fcmTokens, a.fcm_token);
   }
 
-  await Promise.all([
+  const deliveries = await Promise.allSettled([
     ...[...emailByLower.values()].map((to) => sendEmail({ to, subject, text: body, from: companyFrom })),
     ...[...fcmTokens].map((toToken) =>
       sendFcm({
@@ -96,6 +96,13 @@ async function notifyQualityInspectionError({ companyId, qualityId, technicianId
       })
     )
   ]);
+  const failed = deliveries.filter((r) => r.status === 'rejected');
+  if (failed.length > 0) {
+    console.warn(
+      `[quality-inspection-notify] ${failed.length} delivery(ies) failed for qualityId=${qualityId}:`,
+      failed.map((f) => String(f.reason?.message || f.reason || 'unknown'))
+    );
+  }
 }
 
 module.exports = { notifyQualityInspectionError };

@@ -4,7 +4,21 @@ const env = require('../config/env');
 function trimEmail(value) {
   if (value == null) return null;
   const s = String(value).trim();
-  return s.length > 0 ? s : null;
+  if (!s) return null;
+  const m = s.match(/<([^<>@\s]+@[^<>@\s]+)>/);
+  if (m?.[1]) return m[1].trim();
+  return s.includes('@') ? s : null;
+}
+
+function resolveHeaderFrom(from) {
+  const raw =
+    String(from || '').trim() ||
+    String(env.mail.mailFrom || '').trim() ||
+    String(env.mail.smtpUser || '').trim();
+  const parsed = trimEmail(raw);
+  if (!raw && parsed) return parsed;
+  if (!raw) return parsed || 'no-reply@example.com';
+  return raw;
 }
 
 async function sendEmail({ to, subject, text, html = null, attachments = [], from = null }) {
@@ -28,18 +42,20 @@ async function sendEmail({ to, subject, text, html = null, attachments = [], fro
   });
 
   try {
-    const sender =
-      trimEmail(from) ||
-      trimEmail(env.mail.mailFrom) ||
+    const headerFrom = resolveHeaderFrom(from);
+    const senderEmail =
+      trimEmail(headerFrom) ||
       trimEmail(env.mail.smtpUser) ||
       'no-reply@example.com';
+    // Keep SMTP envelope tied to authenticated mailbox for better deliverability.
+    const envelopeFrom = trimEmail(env.mail.smtpUser) || senderEmail;
     const info = await transporter.sendMail({
       // Keep SMTP auth user for login, while allowing per-company sender when provided.
-      from: sender,
-      sender,
-      replyTo: sender,
+      from: headerFrom,
+      sender: senderEmail,
+      replyTo: senderEmail,
       envelope: {
-        from: sender,
+        from: envelopeFrom,
         to: Array.isArray(to) ? to : [to]
       },
       to,
@@ -51,7 +67,8 @@ async function sendEmail({ to, subject, text, html = null, attachments = [], fro
     console.log('[mail] sent', {
       to,
       subject,
-      from: sender,
+      from: headerFrom,
+      sender: senderEmail,
       smtpUser: env.mail.smtpUser,
       envelopeFrom: info?.envelope?.from || null,
       messageId: info?.messageId || null
