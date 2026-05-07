@@ -56,7 +56,7 @@ function copperFiberSlots() {
     slot('COP_CABLE_INT', 'Cable interior', SOURCE_CAMERA),
     slot('COP_JACK', 'Jack/roseta', SOURCE_CAMERA),
     slot('COP_MODEM', 'Módem/ONT', SOURCE_CAMERA),
-    slot('COP_SACS_PARAMS', 'Parámetros (SACS)', SOURCE_GALLERY)
+    slot('COP_SACS_PARAMS', 'Parámetros (SACS)', SOURCE_CAMERA)
   ];
 }
 
@@ -69,7 +69,7 @@ function voiceInternetSlots() {
     slot('VI_INDOOR_IN', 'Entrada en interior', SOURCE_CAMERA),
     slot('VI_JACK', 'Jack/roseta', SOURCE_CAMERA),
     slot('VI_MODEM', 'Módem/ONT', SOURCE_CAMERA),
-    slot('VI_SACS_PARAMS', 'Parámetros (SACS)', SOURCE_GALLERY)
+    slot('VI_SACS_PARAMS', 'Parámetros (SACS)', SOURCE_CAMERA)
   ];
 }
 

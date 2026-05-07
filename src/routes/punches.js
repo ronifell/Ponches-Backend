@@ -59,14 +59,19 @@ async function inferPunchType({ employeeId, workdayDate, employeeType, insideGeo
   if (endWorkday) return 'EXIT';
 
   const [rows] = await pool.query(
-    `SELECT id
+    `SELECT punch_type
      FROM punches
-     WHERE user_id = ? AND workday_date = ?
-     ORDER BY occurred_at ASC
-     LIMIT 1`,
+     WHERE user_id = ? AND workday_date = ?`,
     [employeeId, workdayDate]
   );
-  const hasPunchesToday = Boolean(rows?.length);
+  const punchesToday = rows || [];
+  const hasPunchesToday = punchesToday.length > 0;
+  const hasEntryToday = punchesToday.some((r) => String(r.punch_type || '').toUpperCase() === 'ENTRY');
+
+  if (employeeType === 'CENTRALIZED' && !hasEntryToday && insideGeofence) {
+    // Late sync/offline recovery: first in-geofence punch of the day must backfill ENTRY.
+    return 'ENTRY';
+  }
   if (hasPunchesToday) return 'MOVEMENT';
 
   if (employeeType === 'DECENTRALIZED') {

@@ -457,7 +457,7 @@ async function getQualityDetailAdmin(req, res) {
 
   const [photos] = await pool.query(
     `SELECT id, photo_type, photo_url, fe, fe_comment, COALESCE(inspector_decision, 'NONE') AS inspector_decision,
-            inspector_comment, created_at
+            inspector_comment, latitude, longitude, captured_at, created_at
      FROM quality_photos
      WHERE quality_id = ?
      ORDER BY created_at ASC`,
@@ -489,6 +489,10 @@ async function getQualityDetailAdmin(req, res) {
       feComment: p.fe_comment,
       inspectorDecision: String(p.inspector_decision || 'NONE').toUpperCase(),
       inspectorComment: p.inspector_comment != null ? String(p.inspector_comment) : null,
+      latitude: p.latitude != null ? Number(p.latitude) : null,
+      longitude: p.longitude != null ? Number(p.longitude) : null,
+      capturedAt: p.captured_at || p.created_at,
+      employeeCode: q.technician_code,
       createdAt: p.created_at
     }))
   });

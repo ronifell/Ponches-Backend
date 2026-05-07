@@ -6,6 +6,7 @@ const env = require('../config/env');
 const { pool } = require('../db/pool');
 const { ensureQualityPhotosInspectorDecisionColumn } = require('../db/ensureQualityPhotoInspector');
 const { authRequired } = require('../middleware/auth');
+const { parseOccuredAt } = require('../utils/timezone');
 const { sendEmail, sendFcm } = require('../services/notify');
 const {
   clampStbCount,
@@ -176,12 +177,36 @@ module.exports = function registerQualityRoutes(app) {
       });
     }
 
+    const normalizedOrderId = String(orderId).trim();
+    const [dupRows] = await pool.query(
+      `SELECT id, user_id, status
+       FROM qualities
+       WHERE company_id = ? AND order_id = ?
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [req.user.companyId, normalizedOrderId]
+    );
+    const duplicate = dupRows?.[0];
+    if (duplicate) {
+      if (String(duplicate.user_id) === String(req.user.employeeId)) {
+        return res.status(200).json({
+          id: duplicate.id,
+          ok: true,
+          duplicate: true,
+          status: duplicate.status,
+          stbCount,
+          requiredPhotoTypes: slots
+        });
+      }
+      return res.status(409).json({ error: 'Order already exists in quality table' });
+    }
+
     const id = uuidv4();
     await pool.query(
       `INSERT INTO qualities
       (id, company_id, user_id, order_id, work_type, status, stb_count)
       VALUES (?, ?, ?, ?, ?, 'PENDING', ?)`,
-      [id, req.user.companyId, req.user.employeeId, String(orderId), wt, stbCount]
+      [id, req.user.companyId, req.user.employeeId, normalizedOrderId, wt, stbCount]
     );
     return res.status(201).json({ id, ok: true, stbCount, requiredPhotoTypes: slots });
   });
@@ -193,6 +218,9 @@ module.exports = function registerQualityRoutes(app) {
     const photoTypeRaw = normalizeMultipartScalar(body.photoType ?? body['photo-type']);
     const feRaw = body.fe;
     const feCommentRaw = normalizeMultipartScalar(body.feComment ?? body.fe_comment);
+    const latitudeRaw = body.latitude;
+    const longitudeRaw = body.longitude;
+    const occurredAtRaw = normalizeMultipartScalar(body.occurredAt ?? body.occurred_at);
     if (!req.file) return res.status(400).json({ error: 'Missing photo file' });
 
     const [qualityRows] = await pool.query(
@@ -202,9 +230,12 @@ module.exports = function registerQualityRoutes(app) {
     const quality = qualityRows?.[0];
     if (!quality) return res.status(404).json({ error: 'Quality not found' });
     if (quality.company_id !== req.user.companyId) return res.status(403).json({ error: 'Forbidden' });
-    if (String(quality.status || '').toUpperCase() !== 'PENDING') {
+    if (req.user.role !== 'ADMIN' && String(quality.user_id) !== String(req.user.employeeId)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    if (!['PENDING', 'REJECTED'].includes(String(quality.status || '').toUpperCase())) {
       return res.status(400).json({
-        error: 'Cannot add photos: this quality session was already submitted or is under review'
+        error: 'Cannot add photos: this quality session is not editable right now'
       });
     }
 
@@ -230,13 +261,43 @@ module.exports = function registerQualityRoutes(app) {
       });
     }
 
+    const lat =
+      latitudeRaw !== undefined && latitudeRaw !== null && String(latitudeRaw).trim() !== ''
+        ? Number(latitudeRaw)
+        : null;
+    const lng =
+      longitudeRaw !== undefined && longitudeRaw !== null && String(longitudeRaw).trim() !== ''
+        ? Number(longitudeRaw)
+        : null;
+    if (lat != null && !Number.isFinite(lat)) {
+      return res.status(400).json({ error: 'Invalid latitude' });
+    }
+    if (lng != null && !Number.isFinite(lng)) {
+      return res.status(400).json({ error: 'Invalid longitude' });
+    }
+
+    const capturedAtSql = parseOccuredAt(occurredAtRaw).toSQL({ includeOffset: false });
+
+    // Editable flow: each slot should keep the latest image only.
+    await pool.query(`DELETE FROM quality_photos WHERE quality_id = ? AND photo_type = ?`, [qualityId, normalizedPhotoType]);
+
     const photoId = uuidv4();
     const photoUrl = `/uploads/quality/${req.file.filename}`;
     await pool.query(
       `INSERT INTO quality_photos
-      (id, quality_id, photo_type, photo_url, fe, fe_comment)
-      VALUES (?, ?, ?, ?, ?, ?)`,
-      [photoId, qualityId, normalizedPhotoType, photoUrl, feOn ? 1 : 0, normalizedComment || null]
+      (id, quality_id, photo_type, photo_url, fe, fe_comment, latitude, longitude, captured_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        photoId,
+        qualityId,
+        normalizedPhotoType,
+        photoUrl,
+        feOn ? 1 : 0,
+        normalizedComment || null,
+        lat,
+        lng,
+        capturedAtSql
+      ]
     );
 
     return res.status(201).json({ id: photoId, photoUrl, ok: true });
@@ -253,7 +314,10 @@ module.exports = function registerQualityRoutes(app) {
     const quality = qualityRows?.[0];
     if (!quality) return res.status(404).json({ error: 'Quality not found' });
     if (quality.company_id !== req.user.companyId) return res.status(403).json({ error: 'Forbidden' });
-    if (String(quality.status || '').toUpperCase() !== 'PENDING') {
+    if (req.user.role !== 'ADMIN' && String(quality.user_id) !== String(req.user.employeeId)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    if (!['PENDING', 'REJECTED'].includes(String(quality.status || '').toUpperCase())) {
       return res.status(400).json({ error: 'Order was already submitted for review' });
     }
 
@@ -319,9 +383,10 @@ module.exports = function registerQualityRoutes(app) {
       `SELECT id, user_id, order_id, work_type, stb_count, status, created_at, updated_at
        FROM qualities
        WHERE company_id = ?
+         AND ( ? = 'ADMIN' OR user_id = ? )
        ORDER BY created_at DESC
        LIMIT 200`,
-      [req.user.companyId]
+      [req.user.companyId, String(req.user.role || ''), req.user.employeeId]
     );
     return res.json({ items: rows || [] });
   });
@@ -342,7 +407,7 @@ module.exports = function registerQualityRoutes(app) {
 
     const [photos] = await pool.query(
       `SELECT id, photo_type, photo_url, fe, fe_comment, COALESCE(inspector_decision, 'NONE') AS inspector_decision,
-              inspector_comment, created_at
+              inspector_comment, latitude, longitude, captured_at, created_at
        FROM quality_photos
        WHERE quality_id = ?
        ORDER BY created_at ASC`,
@@ -358,6 +423,9 @@ module.exports = function registerQualityRoutes(app) {
         feComment: p.fe_comment,
         inspectorDecision: String(p.inspector_decision || 'NONE').toUpperCase(),
         inspectorComment: p.inspector_comment != null ? String(p.inspector_comment) : null,
+        latitude: p.latitude != null ? Number(p.latitude) : null,
+        longitude: p.longitude != null ? Number(p.longitude) : null,
+        capturedAt: p.captured_at || p.created_at,
         createdAt: p.created_at
       }))
     });

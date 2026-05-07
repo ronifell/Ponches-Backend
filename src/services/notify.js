@@ -11,8 +11,10 @@ function trimEmail(value) {
 }
 
 function resolveHeaderFrom(from) {
+  const COMPANY_SENDER_FALLBACK = 'suadt@vozsrl.net';
   const raw =
     String(from || '').trim() ||
+    COMPANY_SENDER_FALLBACK ||
     String(env.mail.mailFrom || '').trim() ||
     String(env.mail.smtpUser || '').trim();
   const parsed = trimEmail(raw);

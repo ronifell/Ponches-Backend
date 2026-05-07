@@ -24,6 +24,21 @@ async function ensureQualityPhotosInspectorDecisionColumn() {
   } catch (e) {
     if (e.code !== 'ER_DUP_FIELDNAME') throw e;
   }
+  try {
+    await pool.query(`ALTER TABLE quality_photos ADD COLUMN latitude DOUBLE NULL`);
+  } catch (e) {
+    if (e.code !== 'ER_DUP_FIELDNAME') throw e;
+  }
+  try {
+    await pool.query(`ALTER TABLE quality_photos ADD COLUMN longitude DOUBLE NULL`);
+  } catch (e) {
+    if (e.code !== 'ER_DUP_FIELDNAME') throw e;
+  }
+  try {
+    await pool.query(`ALTER TABLE quality_photos ADD COLUMN captured_at DATETIME(3) NULL`);
+  } catch (e) {
+    if (e.code !== 'ER_DUP_FIELDNAME') throw e;
+  }
   photoInspectorDecisionColumnEnsured = true;
 }
 
