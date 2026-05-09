@@ -3,6 +3,7 @@ const path = require('path');
 const { pool } = require('../db/pool');
 const { ensureEmployeeRegionColumns } = require('../db/ensureEmployeeRegion');
 const { ensureQualityPhotosInspectorDecisionColumn } = require('../db/ensureQualityPhotoInspector');
+const { ensureQualitiesCustomerMobileColumn } = require('../db/ensureQualitiesCustomerMobile');
 const { viewerRegionParams } = require('../lib/regionScope');
 const { authRequired, requireRole } = require('../middleware/auth');
 const { DateTime } = require('luxon');
@@ -344,6 +345,11 @@ async function listQualityForAdmin(req, res) {
   const uiStatus = String(firstQueryParam(req.query.uiStatus) || '')
     .trim()
     .toUpperCase();
+  const inspectorDecisionFilter = String(
+    firstQueryParam(req.query.inspectorDecision) || ''
+  )
+    .trim()
+    .toUpperCase();
   const feExistsSql =
     'EXISTS (SELECT 1 FROM quality_photos qp_fe WHERE qp_fe.quality_id = q.id AND qp_fe.fe = 1)';
   if (uiStatus === 'OK') {
@@ -358,6 +364,13 @@ async function listQualityForAdmin(req, res) {
     conditions.push(
       `( NOT (q.status = 'APPROVED' OR q.inspector_decision = 'OK') AND NOT (q.status = 'REJECTED' OR q.inspector_decision = 'ERROR') AND NOT (q.inspector_decision = 'FE' OR ${feExistsSql}) )`
     );
+  }
+
+  if (inspectorDecisionFilter === 'NONE' || inspectorDecisionFilter === 'PENDING') {
+    conditions.push(`q.inspector_decision = 'NONE'`);
+  } else if (['FE', 'ERROR', 'OK'].includes(inspectorDecisionFilter)) {
+    conditions.push('q.inspector_decision = ?');
+    params.push(inspectorDecisionFilter);
   }
 
   const whereSql = conditions.join(' AND ');
@@ -398,6 +411,7 @@ async function listQualityForAdmin(req, res) {
 
 async function getQualityDetailAdmin(req, res) {
   await ensureInspectorDecisionColumn();
+  await ensureQualitiesCustomerMobileColumn();
   await ensureQualityPhotosInspectorDecisionColumn();
   await ensureEmployeeRegionColumns();
   const { qualityId } = req.params;
@@ -476,6 +490,7 @@ async function getQualityDetailAdmin(req, res) {
     workType: q.work_type,
     stbCount: q.stb_count,
     status: q.status,
+    customerMobile: q.customer_mobile != null ? String(q.customer_mobile) : null,
     inspectorDecision: q.inspector_decision || 'NONE',
     createdAt: q.created_at,
     updatedAt: q.updated_at,

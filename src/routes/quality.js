@@ -4,6 +4,7 @@ const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
 const env = require('../config/env');
 const { pool } = require('../db/pool');
+const { ensureQualitiesCustomerMobileColumn } = require('../db/ensureQualitiesCustomerMobile');
 const { ensureQualityPhotosInspectorDecisionColumn } = require('../db/ensureQualityPhotoInspector');
 const { authRequired } = require('../middleware/auth');
 const { parseOccuredAt } = require('../utils/timezone');
@@ -24,6 +25,18 @@ function normalizeMultipartScalar(v) {
     s = s.slice(1, -1);
   }
   return s;
+}
+
+/** Multer may deliver duplicate fields as an array; be strict so FE is never implied accidentally. */
+function parseMultipartFeFlag(raw) {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  if (v === true || v === 1) return true;
+  if (v === false || v === 0) return false;
+  if (v == null || v === '') return false;
+  const s = String(normalizeMultipartScalar(String(v)) ?? '')
+    .trim()
+    .toLowerCase();
+  return s === 'true' || s === '1' || s === 'yes';
 }
 
 function ensureDir(dir) {
@@ -58,6 +71,12 @@ async function ensureQualitiesStbCountColumn() {
     if (e.code !== 'ER_DUP_FIELDNAME') throw e;
   }
   qualitiesStbColumnEnsured = true;
+}
+
+function normalizeCustomerMobile(v) {
+  const s = String(v ?? '').trim();
+  if (!s) return null;
+  return s.slice(0, 32);
 }
 
 function requiredPhotoTypesForWorkType(workType, stbCount) {
@@ -162,6 +181,7 @@ async function notifyQualityOrderComplete({ companyId, qualityId, orderId, uploa
 module.exports = function registerQualityRoutes(app) {
   app.post('/quality', authRequired, async (req, res) => {
     await ensureQualitiesStbCountColumn();
+    await ensureQualitiesCustomerMobileColumn();
     // Status is always PENDING until required photos exist and POST .../complete runs.
     // Never trust a client-supplied status (would skip mandatory photo enforcement).
     const { orderId, workType, stbCount: stbCountRaw } = req.body || {};
@@ -178,6 +198,7 @@ module.exports = function registerQualityRoutes(app) {
     }
 
     const normalizedOrderId = String(orderId).trim();
+    const customerMobileNorm = normalizeCustomerMobile(req.body?.customerMobile ?? req.body?.customer_mobile);
     const [dupRows] = await pool.query(
       `SELECT id, user_id, status
        FROM qualities
@@ -189,6 +210,22 @@ module.exports = function registerQualityRoutes(app) {
     const duplicate = dupRows?.[0];
     if (duplicate) {
       if (String(duplicate.user_id) === String(req.user.employeeId)) {
+        const dupSt = String(duplicate.status || '').toUpperCase();
+        const editableForTechnician = ['PENDING', 'REJECTED', 'IN_REVIEW'].includes(dupSt);
+        if (!editableForTechnician) {
+          return res.status(400).json({
+            error: `This order is not editable in the app right now (status: ${dupSt}).`,
+            status: duplicate.status,
+            qualityId: duplicate.id
+          });
+        }
+        if (customerMobileNorm) {
+          await pool.query(
+            `UPDATE qualities SET customer_mobile = ?, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ? AND company_id = ?`,
+            [customerMobileNorm, duplicate.id, req.user.companyId]
+          );
+        }
         return res.status(200).json({
           id: duplicate.id,
           ok: true,
@@ -204,11 +241,43 @@ module.exports = function registerQualityRoutes(app) {
     const id = uuidv4();
     await pool.query(
       `INSERT INTO qualities
-      (id, company_id, user_id, order_id, work_type, status, stb_count)
-      VALUES (?, ?, ?, ?, ?, 'PENDING', ?)`,
-      [id, req.user.companyId, req.user.employeeId, normalizedOrderId, wt, stbCount]
+      (id, company_id, user_id, order_id, work_type, status, stb_count, customer_mobile)
+      VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?)`,
+      [id, req.user.companyId, req.user.employeeId, normalizedOrderId, wt, stbCount, customerMobileNorm]
     );
     return res.status(201).json({ id, ok: true, stbCount, requiredPhotoTypes: slots });
+  });
+
+  app.patch('/quality/:qualityId', authRequired, async (req, res) => {
+    await ensureQualitiesStbCountColumn();
+    await ensureQualitiesCustomerMobileColumn();
+    const { qualityId } = req.params;
+    const body = req.body || {};
+    const hasKey =
+      Object.prototype.hasOwnProperty.call(body, 'customerMobile') ||
+      Object.prototype.hasOwnProperty.call(body, 'customer_mobile');
+    if (!hasKey) {
+      return res.status(400).json({ error: 'customerMobile is required' });
+    }
+    const raw = body.customerMobile ?? body.customer_mobile;
+    const mobileVal = raw === null || raw === undefined ? null : normalizeCustomerMobile(raw);
+
+    const [qualityRows] = await pool.query(
+      'SELECT id, company_id, user_id FROM qualities WHERE id = ? LIMIT 1',
+      [qualityId]
+    );
+    const quality = qualityRows?.[0];
+    if (!quality) return res.status(404).json({ error: 'Quality not found' });
+    if (quality.company_id !== req.user.companyId) return res.status(403).json({ error: 'Forbidden' });
+    if (req.user.role !== 'ADMIN' && String(quality.user_id) !== String(req.user.employeeId)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    await pool.query(
+      `UPDATE qualities SET customer_mobile = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND company_id = ?`,
+      [mobileVal, qualityId, req.user.companyId]
+    );
+    return res.json({ ok: true });
   });
 
   app.post('/quality/:qualityId/photos', authRequired, upload.single('photo'), async (req, res) => {
@@ -233,18 +302,26 @@ module.exports = function registerQualityRoutes(app) {
     if (req.user.role !== 'ADMIN' && String(quality.user_id) !== String(req.user.employeeId)) {
       return res.status(403).json({ error: 'Forbidden' });
     }
-    if (!['PENDING', 'REJECTED'].includes(String(quality.status || '').toUpperCase())) {
+    const st = String(quality.status || '').toUpperCase();
+    // Technicians can replace photos while pending, after admin rejection, or while waiting in review.
+    if (!['PENDING', 'REJECTED', 'IN_REVIEW'].includes(st)) {
       return res.status(400).json({
         error: 'Cannot add photos: this quality session is not editable right now'
       });
     }
 
-    const feOn =
-      feRaw === true ||
-      feRaw === 'true' ||
-      feRaw === '1' ||
-      String(feRaw || '').toLowerCase() === 'true';
-    const normalizedComment = String(feCommentRaw || '').trim();
+    const feOn = parseMultipartFeFlag(feRaw);
+    const rawComment = Array.isArray(feCommentRaw) ? feCommentRaw[0] : feCommentRaw;
+    let normalizedComment = '';
+    if (feOn) {
+      const c =
+        typeof rawComment === 'string'
+          ? normalizeMultipartScalar(rawComment)
+          : rawComment == null || rawComment === ''
+            ? ''
+            : String(rawComment);
+      normalizedComment = String(c ?? '').trim();
+    }
     if (feOn && !normalizedComment) {
       return res.status(400).json({
         error: 'Comment is required when the photo is marked out of standard (FE)'
@@ -293,7 +370,7 @@ module.exports = function registerQualityRoutes(app) {
         normalizedPhotoType,
         photoUrl,
         feOn ? 1 : 0,
-        normalizedComment || null,
+        feOn ? normalizedComment || null : null,
         lat,
         lng,
         capturedAtSql
@@ -379,8 +456,9 @@ module.exports = function registerQualityRoutes(app) {
 
   app.get('/quality', authRequired, async (req, res) => {
     await ensureQualitiesStbCountColumn();
+    await ensureQualitiesCustomerMobileColumn();
     const [rows] = await pool.query(
-      `SELECT id, user_id, order_id, work_type, stb_count, status, created_at, updated_at
+      `SELECT id, user_id, order_id, work_type, stb_count, status, customer_mobile, created_at, updated_at
        FROM qualities
        WHERE company_id = ?
          AND ( ? = 'ADMIN' OR user_id = ? )
@@ -393,10 +471,11 @@ module.exports = function registerQualityRoutes(app) {
 
   app.get('/quality/:qualityId', authRequired, async (req, res) => {
     await ensureQualitiesStbCountColumn();
+    await ensureQualitiesCustomerMobileColumn();
     await ensureQualityPhotosInspectorDecisionColumn();
     const { qualityId } = req.params;
     const [rows] = await pool.query(
-      `SELECT id, user_id, order_id, work_type, stb_count, status, created_at, updated_at
+      `SELECT id, user_id, order_id, work_type, stb_count, status, customer_mobile, created_at, updated_at
        FROM qualities
        WHERE id = ? AND company_id = ?
        LIMIT 1`,

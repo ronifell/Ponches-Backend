@@ -85,19 +85,38 @@ async function sendEmail({ to, subject, text, html = null, attachments = [], fro
   }
 }
 
-async function sendFcm({ toToken, title, body }) {
-  if (!env.fcm.serverKey) return; // optional feature
+/** Matches `PonchesFirebaseMessagingService` channel so system-tray notifications use the same channel. */
+const ANDROID_FCM_CHANNEL_ID = 'ponches_fcm_alerts_v2';
 
-  // Lazy require to avoid adding extra deps.
+async function sendFcm({ toToken, title, body }) {
+  if (!env.fcm.serverKey) {
+    console.warn('[fcm] FCM_SERVER_KEY is not set; push skipped');
+    return;
+  }
+
   const https = require('https');
-  // Data-only so Android always delivers to onMessageReceived (foreground/background). A `notification`
-  // payload is shown by the system with defaults that often hide content on the lock screen.
-  const data = JSON.stringify({
+  const t = String(title || '');
+  const b = String(body || '');
+  // Include both `notification` and `data`: data-only messages are often not surfaced when the app is
+  // backgrounded or killed; the notification payload lets Android show the tray notification reliably.
+  const payload = JSON.stringify({
     to: toToken,
     priority: 'high',
+    notification: {
+      title: t,
+      body: b,
+      sound: 'default'
+    },
     data: {
-      title: String(title || ''),
-      body: String(body || '')
+      title: t,
+      body: b
+    },
+    android: {
+      priority: 'high',
+      notification: {
+        channel_id: ANDROID_FCM_CHANNEL_ID,
+        sound: 'default'
+      }
     }
   });
 
@@ -110,16 +129,40 @@ async function sendFcm({ toToken, title, body }) {
         headers: {
           Authorization: `key=${env.fcm.serverKey}`,
           'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(data)
+          'Content-Length': Buffer.byteLength(payload)
         }
       },
       (res) => {
-        res.on('data', () => {});
-        res.on('end', resolve);
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          const raw = Buffer.concat(chunks).toString('utf8');
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            reject(new Error(`FCM HTTP ${res.statusCode}: ${raw.slice(0, 500)}`));
+            return;
+          }
+          try {
+            const j = JSON.parse(raw);
+            if (j.error) {
+              reject(new Error(`FCM: ${j.error}`));
+              return;
+            }
+            const fail = Number(j.failure || 0);
+            if (fail > 0) {
+              const first = Array.isArray(j.results) ? j.results[0] : null;
+              const err = first?.error || j.error || raw.slice(0, 300);
+              reject(new Error(`FCM delivery failed: ${err}`));
+              return;
+            }
+          } catch (_) {
+            /* non-JSON body */
+          }
+          resolve();
+        });
       }
     );
     req.on('error', reject);
-    req.write(data);
+    req.write(payload);
     req.end();
   });
 }

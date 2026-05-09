@@ -87,6 +87,12 @@ async function notifyQualityInspectionError({ companyId, qualityId, technicianId
     offerToken(fcmTokens, a.fcm_token);
   }
 
+  if (fcmTokens.size === 0) {
+    console.warn(
+      `[quality-inspection-notify] no FCM tokens for company=${companyId} qualityId=${qualityId} (employees need app login + notification permission on Android 13+)`
+    );
+  }
+
   const deliveries = await Promise.allSettled([
     ...[...emailByLower.values()].map((to) => sendEmail({ to, subject, text: body, from: companyFrom })),
     ...[...fcmTokens].map((toToken) =>
