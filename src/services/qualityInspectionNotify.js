@@ -1,5 +1,6 @@
 const { pool } = require('../db/pool');
 const { sendEmail, sendFcm } = require('./notify');
+const { getCustomerContactSuffixForQuality } = require('../lib/customerContactEmail');
 
 function offerEmail(map, raw) {
   const o = String(raw || '').trim();
@@ -14,7 +15,9 @@ function offerToken(set, raw) {
 }
 
 /**
- * Admin marked one or more quality photos as ERROR — notify technician, assigned supervisor, and all admins (email + FCM).
+ * Admin marked one or more quality photos as ERROR:
+ * - Push (FCM): technician only — employee code, order, slot(s), validator comment(s).
+ * - Email: technician, assigned supervisor, and every company ADMIN (supervisor resolved by id, not role filter).
  */
 async function notifyQualityInspectionError({ companyId, qualityId, technicianId, orderId }) {
   const [errPhotos] = await pool.query(
@@ -41,7 +44,7 @@ async function notifyQualityInspectionError({ companyId, qualityId, technicianId
   const t = techRows?.[0];
 
   const [adminRows] = await pool.query(
-    `SELECT email, fcm_token FROM employees WHERE company_id = ? AND role = 'ADMIN'`,
+    `SELECT email FROM employees WHERE company_id = ? AND role = 'ADMIN'`,
     [companyId]
   );
   const [coRows] = await pool.query(
@@ -51,57 +54,64 @@ async function notifyQualityInspectionError({ companyId, qualityId, technicianId
   const companyFrom = String(coRows?.[0]?.notification_email || '').trim() || null;
 
   let supEmail = null;
-  let supToken = null;
   if (t?.supervisor_id) {
     const [s] = await pool.query(
-      `SELECT email, fcm_token FROM employees WHERE id = ? AND company_id = ? AND role = 'SUPERVISOR' LIMIT 1`,
+      `SELECT email FROM employees WHERE id = ? AND company_id = ? LIMIT 1`,
       [t.supervisor_id, companyId]
     );
     supEmail = String(s?.[0]?.email || '').trim() || null;
-    supToken = String(s?.[0]?.fcm_token || '').trim() || null;
   }
 
   const orderStr = String(orderId);
-  const subject = `Orden ${orderStr} — error en fotos`;
+  const empCode = String(t?.employee_code || '').trim() || 'N/A';
+  const techName = String(t?.full_name || '').trim();
+  const subject = `[Calidad] Orden ${orderStr} — error en foto(s)`;
+  const contactSuffix = await getCustomerContactSuffixForQuality(qualityId, companyId);
   const body =
-    `Se marcaron errores en fotos de la orden ${orderStr}.\n` +
-    `Detalle:\n${detailBlock}\n` +
-    `Técnico: ${String(t?.full_name || '').trim()} (${String(t?.employee_code || '').trim() || technicianId})\n`;
+    `Se marcaron errores en fotos de la orden ${orderStr}.\n\n` +
+    `Detalle (elemento y comentario del validador):\n${detailBlock}\n\n` +
+    `Código empleado (técnico): ${empCode}\n` +
+    (techName ? `Nombre: ${techName}\n` : '') +
+    `\nRevise la orden en el panel de calidad.` +
+    contactSuffix;
 
   const compactDetail = detailBlock.replace(/\s+/g, ' ').trim();
-  const clippedDetail =
-    compactDetail.length > 120 ? `${compactDetail.slice(0, 117)}...` : compactDetail;
-  const empCode = String(t?.employee_code || '').trim() || 'N/A';
-  const pushBody = `Emp ${empCode} · Orden ${orderStr} · ${clippedDetail}`;
+  const corePush = `${empCode} · Orden ${orderStr} · ${compactDetail}`;
+  const pushBody =
+    corePush.length > 380 ? `${corePush.slice(0, 377)}...` : corePush;
+  const pushTitle = `Error calidad · ${empCode} · ${orderStr}`;
 
   const emailByLower = new Map();
-  const fcmTokens = new Set();
-
   offerEmail(emailByLower, t?.email);
-  offerToken(fcmTokens, t?.fcm_token);
   offerEmail(emailByLower, supEmail);
-  offerToken(fcmTokens, supToken);
-
   for (const a of adminRows || []) {
     offerEmail(emailByLower, a.email);
-    offerToken(fcmTokens, a.fcm_token);
   }
 
-  if (fcmTokens.size === 0) {
+  const technicianFcm = String(t?.fcm_token || '').trim();
+
+  if (!technicianFcm) {
     console.warn(
-      `[quality-inspection-notify] no FCM tokens for company=${companyId} qualityId=${qualityId} (employees need app login + notification permission on Android 13+)`
+      `[quality-inspection-notify] no FCM token for technician employeeId=${technicianId} qualityId=${qualityId} (login on phone + notification permission)`
+    );
+  }
+  if (emailByLower.size === 0) {
+    console.warn(
+      `[quality-inspection-notify] no email recipients (technician/supervisor/admins need addresses) company=${companyId} qualityId=${qualityId}`
     );
   }
 
   const deliveries = await Promise.allSettled([
     ...[...emailByLower.values()].map((to) => sendEmail({ to, subject, text: body, from: companyFrom })),
-    ...[...fcmTokens].map((toToken) =>
-      sendFcm({
-        toToken,
-        title: subject,
-        body: pushBody
-      })
-    )
+    ...(technicianFcm
+      ? [
+          sendFcm({
+            toToken: technicianFcm,
+            title: pushTitle,
+            body: pushBody
+          })
+        ]
+      : [])
   ]);
   const failed = deliveries.filter((r) => r.status === 'rejected');
   if (failed.length > 0) {

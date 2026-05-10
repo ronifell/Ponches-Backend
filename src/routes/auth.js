@@ -1,6 +1,10 @@
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const {
+  CUSTOMER_EMAIL_SUFFIX_NOT_APPLICABLE,
+  CUSTOMER_EMAIL_SUFFIX_NOT_APPLICABLE_HTML
+} = require('../lib/customerContactEmail');
 const { pool } = require('../db/pool');
 const { ensureEmployeeRegionColumns } = require('../db/ensureEmployeeRegion');
 const env = require('../config/env');
@@ -209,8 +213,8 @@ async function requestPasswordReset(req, res) {
   await sendEmail({
     to: employee.email,
     subject: mail.subject,
-    text: mail.text,
-    html: mail.html
+    text: mail.text + CUSTOMER_EMAIL_SUFFIX_NOT_APPLICABLE,
+    html: mail.html + CUSTOMER_EMAIL_SUFFIX_NOT_APPLICABLE_HTML
   });
 
   return res.json({ ok: true });

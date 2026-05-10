@@ -10,6 +10,7 @@ const { parseOccuredAt, toWorkdayDate } = require('../utils/timezone');
 const { haversineDistanceMeters } = require('../utils/distance');
 const { sendEmail, sendFcm } = require('../services/notify');
 const { getAssignedSupervisorContacts } = require('../services/supervisorRecipients');
+const { getCustomerContactSuffixForOrderNumber } = require('../lib/customerContactEmail');
 
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -420,17 +421,22 @@ module.exports = function registerPhotoRoutes(app) {
         const companyFrom = await getCompanyNotificationEmail(companyId);
         const employeeDetails = await getEmployeeNotificationDetails(employeeId);
         const supervisors = await getAssignedSupervisorContacts(employeeId);
-        const supervisorSubject = `Employee photo uploaded (${normalizedOrderNumberStr})`;
-        const supervisorText = buildSupervisorUploadEmailText({
-          employeeDetails,
+        const customerContactSuffix = await getCustomerContactSuffixForOrderNumber(
           normalizedOrderNumberStr,
-          workType,
-          lat,
-          lng,
-          occurredAtSql,
-          validation_result,
-          validation_distance_meters
-        });
+          companyId
+        );
+        const supervisorSubject = `Employee photo uploaded (${normalizedOrderNumberStr})`;
+        const supervisorText =
+          buildSupervisorUploadEmailText({
+            employeeDetails,
+            normalizedOrderNumberStr,
+            workType,
+            lat,
+            lng,
+            occurredAtSql,
+            validation_result,
+            validation_distance_meters
+          }) + customerContactSuffix;
 
         await Promise.all(
           supervisors.map(async (s) => {
@@ -469,7 +475,9 @@ module.exports = function registerPhotoRoutes(app) {
           if (shouldNotify) {
             try {
               const subject = `Photo validation failed (${normalizedOrderNumberStr})`;
-              const text = `A photo for order ${normalizedOrderNumberStr} was rejected (distance=${validation_distance_meters ?? 'n/a'}m).`;
+              const text =
+                `A photo for order ${normalizedOrderNumberStr} was rejected (distance=${validation_distance_meters ?? 'n/a'}m).` +
+                customerContactSuffix;
 
               const employee = await getEmployeeContacts(employeeId);
               const supervisorEmails = supervisors
@@ -520,7 +528,9 @@ module.exports = function registerPhotoRoutes(app) {
             if (shouldNotify) {
               try {
                 const subject = `Photo approved (${normalizedOrderNumberStr})`;
-                const text = `Your photo for order ${normalizedOrderNumberStr} was validated successfully.`;
+                const text =
+                  `Your photo for order ${normalizedOrderNumberStr} was validated successfully.` +
+                  customerContactSuffix;
                 await Promise.all([
                   ...emailTargets.map((to) =>
                     sendEmail({

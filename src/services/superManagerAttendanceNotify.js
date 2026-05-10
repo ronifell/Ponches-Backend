@@ -1,4 +1,5 @@
 const { pool } = require('../db/pool');
+const { CUSTOMER_EMAIL_SUFFIX_NOT_APPLICABLE } = require('../lib/customerContactEmail');
 const env = require('../config/env');
 const { sendEmail } = require('./notify');
 
@@ -127,7 +128,7 @@ async function notifySuperManagerAttendanceRecord({
     `Manual close: ${manualClose ? 'yes' : 'no'}`
   ];
   if (geofenceKey) lines.push(`Geofence: ${geofenceKey}`);
-  const text = lines.join('\n');
+  const text = lines.join('\n') + CUSTOMER_EMAIL_SUFFIX_NOT_APPLICABLE;
 
   // Always email the company notification address stored on `companies.notification_email`
   // when a workday is closed (manual or auto).

@@ -14,6 +14,8 @@ const {
   allowedPhotoTypes,
   normalizeWorkType
 } = require('../config/qualityPhotoCatalog');
+const { rollupQualityAfterTechnicianPhotoUpload } = require('../services/qualityRollup');
+const { getCustomerContactSuffixForQuality } = require('../lib/customerContactEmail');
 
 /** Multer text fields sometimes arrive quoted or JSON-escaped (same as /photos). */
 function normalizeMultipartScalar(v) {
@@ -146,13 +148,15 @@ async function notifyQualityOrderComplete({ companyId, qualityId, orderId, uploa
   const orderStr = String(orderId);
   const subject = anyFe ? `FE ${orderStr}` : orderStr;
   const uploaderLabel = uploader?.employee_code || uploader?.full_name || uploaderId;
+  const contactSuffix = await getCustomerContactSuffixForQuality(qualityId, companyId);
   const body =
     `Orden de calidad completada por el técnico.\n\n` +
     `Técnico: ${uploaderLabel}\n` +
     `Orden: ${orderStr}\n` +
     `Tipo de trabajo: ${workType}\n` +
     `Marcada fuera de estándar (FE): ${anyFe ? 'Sí' : 'No'}\n` +
-    `ID calidad: ${qualityId}`;
+    `ID calidad: ${qualityId}` +
+    contactSuffix;
 
   const adminEmails = [...new Set((adminRows || []).map((r) => trimEmail(r.email)).filter(Boolean))];
   const emailRecipients = [...new Set([...adminEmails, ...(supervisorEmail ? [supervisorEmail] : [])])];
@@ -282,6 +286,7 @@ module.exports = function registerQualityRoutes(app) {
 
   app.post('/quality/:qualityId/photos', authRequired, upload.single('photo'), async (req, res) => {
     await ensureQualitiesStbCountColumn();
+    await ensureQualityPhotosInspectorDecisionColumn();
     const { qualityId } = req.params;
     const body = req.body || {};
     const photoTypeRaw = normalizeMultipartScalar(body.photoType ?? body['photo-type']);
@@ -362,8 +367,9 @@ module.exports = function registerQualityRoutes(app) {
     const photoUrl = `/uploads/quality/${req.file.filename}`;
     await pool.query(
       `INSERT INTO quality_photos
-      (id, quality_id, photo_type, photo_url, fe, fe_comment, latitude, longitude, captured_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (id, quality_id, photo_type, photo_url, fe, fe_comment, latitude, longitude, captured_at,
+       inspector_decision, inspector_comment)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'NONE', NULL)`,
       [
         photoId,
         qualityId,
@@ -375,6 +381,10 @@ module.exports = function registerQualityRoutes(app) {
         lng,
         capturedAtSql
       ]
+    );
+
+    await rollupQualityAfterTechnicianPhotoUpload(qualityId, req.user.companyId).catch((e) =>
+      console.warn('[quality] rollup after technician photo failed:', e.message || e)
     );
 
     return res.status(201).json({ id: photoId, photoUrl, ok: true });

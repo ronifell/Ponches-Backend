@@ -1,6 +1,10 @@
 const { pool } = require('../db/pool');
 const { sendEmail, sendFcm } = require('./notify');
 const { getAssignedSupervisorContacts } = require('./supervisorRecipients');
+const {
+  CUSTOMER_EMAIL_SUFFIX_NOT_APPLICABLE,
+  CUSTOMER_EMAIL_SUFFIX_NOT_APPLICABLE_HTML
+} = require('../lib/customerContactEmail');
 const { haversineDistanceMeters } = require('../utils/distance');
 const { ZONE } = require('../utils/timezone');
 
@@ -216,28 +220,30 @@ async function notifyLateArrivalIfNeeded({ employeeId, officeId, occurredAtDt, l
   const supervisors = await getAssignedSupervisorContacts(employeeId);
 
   const hhmm = occurredAtDt.setZone(ZONE).toFormat('HH:mm');
-  const html = buildLateArrivalSpanishHtml({
-    fullName: employee?.full_name,
-    employeeCode: employee?.employee_code,
-    occurredAtDt,
-    empLat: latitude != null ? Number(latitude) : null,
-    empLng: longitude != null ? Number(longitude) : null,
-    officeName: ctx.officeName,
-    officeLat: ctx.officeLat,
-    officeLng: ctx.officeLng,
-    radiusMeters: ctx.radiusMeters
-  });
-  const textBody = buildLateArrivalSpanishPlain({
-    fullName: employee?.full_name,
-    employeeCode: employee?.employee_code,
-    occurredAtDt,
-    empLat: latitude != null ? Number(latitude) : null,
-    empLng: longitude != null ? Number(longitude) : null,
-    officeName: ctx.officeName,
-    officeLat: ctx.officeLat,
-    officeLng: ctx.officeLng,
-    radiusMeters: ctx.radiusMeters
-  });
+  const html =
+    buildLateArrivalSpanishHtml({
+      fullName: employee?.full_name,
+      employeeCode: employee?.employee_code,
+      occurredAtDt,
+      empLat: latitude != null ? Number(latitude) : null,
+      empLng: longitude != null ? Number(longitude) : null,
+      officeName: ctx.officeName,
+      officeLat: ctx.officeLat,
+      officeLng: ctx.officeLng,
+      radiusMeters: ctx.radiusMeters
+    }) + CUSTOMER_EMAIL_SUFFIX_NOT_APPLICABLE_HTML;
+  const textBody =
+    buildLateArrivalSpanishPlain({
+      fullName: employee?.full_name,
+      employeeCode: employee?.employee_code,
+      occurredAtDt,
+      empLat: latitude != null ? Number(latitude) : null,
+      empLng: longitude != null ? Number(longitude) : null,
+      officeName: ctx.officeName,
+      officeLat: ctx.officeLat,
+      officeLng: ctx.officeLng,
+      radiusMeters: ctx.radiusMeters
+    }) + CUSTOMER_EMAIL_SUFFIX_NOT_APPLICABLE;
   const subject = `Llegada tardía - ${hhmm}`;
 
   const pushTitle = `Llegada tardía - ${hhmm}`;
@@ -281,12 +287,14 @@ async function notifyWorkdayAutoClosed({ employeeId, officeId, occurredAtDt }) {
   const subjectEmp = `Jornada cerrada automáticamente - ${fecha}`;
   const bodyEmp =
     `El sistema cerró tu jornada laboral el ${fecha} porque no se registró salida manual antes del cierre automático.\n` +
-    `Oficina: ${officeName}\n`;
+    `Oficina: ${officeName}\n` +
+    CUSTOMER_EMAIL_SUFFIX_NOT_APPLICABLE;
 
   const subjectSup = `Cierre automático de jornada - ${who}`;
   const bodySup =
     `El sistema cerró automáticamente la jornada del empleado ${who} el ${fecha}.\n` +
-    `Oficina: ${officeName}.\n`;
+    `Oficina: ${officeName}.\n` +
+    CUSTOMER_EMAIL_SUFFIX_NOT_APPLICABLE;
 
   await Promise.all([
     ...(employee?.email
