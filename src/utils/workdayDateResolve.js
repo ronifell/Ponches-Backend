@@ -1,5 +1,26 @@
+const { DateTime } = require('luxon');
 const { pool } = require('../db/pool');
-const { toWorkdayDate } = require('./timezone');
+const { toWorkdayDate, ZONE } = require('./timezone');
+
+/**
+ * mysql2 returns JS `Date` for DATE columns; `String(d).slice(0,10)` becomes "Sun Apr 19" (invalid for SQL DATE).
+ * Always normalize to yyyy-LL-dd for binds.
+ */
+function toIsoWorkdayDateSql(value) {
+  if (value == null || value === '') return null;
+  if (value instanceof Date) {
+    return DateTime.fromJSDate(value).setZone(ZONE).toFormat('yyyy-LL-dd');
+  }
+  const str = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.slice(0, 10);
+  const dt = DateTime.fromISO(str, { zone: ZONE });
+  if (dt.isValid) return dt.toFormat('yyyy-LL-dd');
+  const t = Date.parse(str);
+  if (!Number.isNaN(t)) {
+    return DateTime.fromMillis(t).setZone(ZONE).toFormat('yyyy-LL-dd');
+  }
+  return str.slice(0, 10);
+}
 
 /**
  * Use the same calendar `workday_date` as today's activity rows when present, so manual close
@@ -18,8 +39,7 @@ async function resolveWorkdayDateForClose(employeeId, occurredAtDt) {
   );
   const d = rows?.[0]?.workday_date;
   if (d) {
-    const s = typeof d === 'string' ? d.slice(0, 10) : String(d).slice(0, 10);
-    return s;
+    return toIsoWorkdayDateSql(d);
   }
   return target;
 }
