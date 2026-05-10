@@ -88,17 +88,55 @@ async function sendEmail({ to, subject, text, html = null, attachments = [], fro
 /** Matches `PonchesFirebaseMessagingService` channel so system-tray notifications use the same channel. */
 const ANDROID_FCM_CHANNEL_ID = 'ponches_fcm_alerts_v2';
 
-async function sendFcm({ toToken, title, body }) {
-  if (!env.fcm.serverKey) {
-    console.warn('[fcm] FCM_SERVER_KEY is not set; push skipped');
-    return;
+/** Lazily initialized Firebase Admin messaging (HTTP v1). `null` = not configured or init failed. */
+let fcmV1Messaging = undefined;
+
+function resolveServiceAccountPath() {
+  const p = String(process.env.FIREBASE_SERVICE_ACCOUNT_PATH || '').trim();
+  if (p) return p;
+  return String(process.env.GOOGLE_APPLICATION_CREDENTIALS || '').trim();
+}
+
+function tryGetFcmV1Messaging() {
+  if (fcmV1Messaging !== undefined) return fcmV1Messaging;
+
+  const jsonInline = String(process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '').trim();
+  const keyPath = resolveServiceAccountPath();
+  if (!jsonInline && !keyPath) {
+    fcmV1Messaging = null;
+    return null;
   }
 
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const admin = require('firebase-admin');
+    if (!admin.apps.length) {
+      if (jsonInline) {
+        admin.initializeApp({ credential: admin.credential.cert(JSON.parse(jsonInline)) });
+      } else {
+        const resolved = path.isAbsolute(keyPath) ? keyPath : path.join(process.cwd(), keyPath);
+        if (!fs.existsSync(resolved)) {
+          console.warn(`[fcm] HTTP v1: service account file not found (${resolved}); falling back to legacy key if set`);
+          fcmV1Messaging = null;
+          return null;
+        }
+        const parsed = JSON.parse(fs.readFileSync(resolved, 'utf8'));
+        admin.initializeApp({ credential: admin.credential.cert(parsed) });
+      }
+    }
+    fcmV1Messaging = admin.messaging();
+  } catch (e) {
+    console.warn('[fcm] HTTP v1 init failed:', e.message || e);
+    fcmV1Messaging = null;
+  }
+  return fcmV1Messaging;
+}
+
+async function sendFcmLegacy({ toToken, title, body }) {
   const https = require('https');
   const t = String(title || '');
   const b = String(body || '');
-  // Include both `notification` and `data`: data-only messages are often not surfaced when the app is
-  // backgrounded or killed; the notification payload lets Android show the tray notification reliably.
   const payload = JSON.stringify({
     to: toToken,
     priority: 'high',
@@ -138,7 +176,7 @@ async function sendFcm({ toToken, title, body }) {
         res.on('end', () => {
           const raw = Buffer.concat(chunks).toString('utf8');
           if (res.statusCode < 200 || res.statusCode >= 300) {
-            reject(new Error(`FCM HTTP ${res.statusCode}: ${raw.slice(0, 500)}`));
+            reject(new Error(`FCM legacy HTTP ${res.statusCode}: ${raw.slice(0, 500)}`));
             return;
           }
           try {
@@ -165,6 +203,44 @@ async function sendFcm({ toToken, title, body }) {
     req.write(payload);
     req.end();
   });
+}
+
+async function sendFcm({ toToken, title, body }) {
+  const token = String(toToken || '').trim();
+  if (!token) {
+    console.warn('[fcm] missing device token; push skipped');
+    return;
+  }
+
+  const t = String(title || '');
+  const b = String(body || '');
+  const messaging = tryGetFcmV1Messaging();
+  if (messaging) {
+    await messaging.send({
+      token,
+      notification: { title: t, body: b },
+      data: { title: t, body: b },
+      android: {
+        priority: 'high',
+        notification: {
+          channelId: ANDROID_FCM_CHANNEL_ID,
+          sound: 'default'
+        }
+      }
+    });
+    console.log('[fcm] sent (HTTP v1)', { tokenLen: token.length });
+    return;
+  }
+
+  if (env.fcm.serverKey) {
+    await sendFcmLegacy({ toToken: token, title: t, body: b });
+    console.log('[fcm] sent (legacy)', { tokenLen: token.length });
+    return;
+  }
+
+  console.warn(
+    '[fcm] push skipped: set FIREBASE_SERVICE_ACCOUNT_PATH, GOOGLE_APPLICATION_CREDENTIALS, or FIREBASE_SERVICE_ACCOUNT_JSON for HTTP v1, or FCM_SERVER_KEY for legacy'
+  );
 }
 
 module.exports = { sendEmail, sendFcm };

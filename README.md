@@ -10,7 +10,7 @@ Edit:
 - `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`
 - `JWT_SECRET`
 - SMTP settings if you want email alerts
-- `FCM_SERVER_KEY` if you want push notifications
+- FCM: set `FIREBASE_SERVICE_ACCOUNT_PATH` (or `GOOGLE_APPLICATION_CREDENTIALS`) to your Firebase service account JSON for HTTP v1, or legacy `FCM_SERVER_KEY` if you still use it
 
 ## Setup
 

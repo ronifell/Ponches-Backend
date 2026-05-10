@@ -64,6 +64,7 @@ module.exports = {
   },
 
   fcm: {
+    /** Legacy only; HTTP v1 uses FIREBASE_SERVICE_ACCOUNT_* / GOOGLE_APPLICATION_CREDENTIALS (see notify.js). */
     serverKey: process.env.FCM_SERVER_KEY || ''
   },
 
